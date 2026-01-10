@@ -20,7 +20,7 @@
 // our helper library for window handling
 #include <GL/gl.h>
 #include <chrono>
-
+#include <fstream>
 
 /*! \namespace osc - Optix Siggraph Course */
 namespace osc {
@@ -164,9 +164,9 @@ namespace osc {
 	extern "C" int main(int ac, char** av)
 	{
 
-		std::string modelFile = "/home/group1/jym/Repos/optix7course/mesh/exp1/ruyi_recur1_n.off";
-		std::string urpFile = "/home/group1/jym/Repos/optix7course/mesh/exp1/ruyi_recur1_urps_n.off";
-		std::string outFile = "/home/group1/jym/Repos/optix7course/mesh/exp1/ruyi_recur1_output_collision.obj";
+		std::string modelFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_n.off";
+		std::string urpFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_urps_n.off";
+		std::string outFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_output_collision.obj";
 
 		/*std::string modelFile = "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\test_scaled.off" "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\sample_scaled.off" "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\output_scaled.obj"*/
 
@@ -192,8 +192,8 @@ namespace osc {
 
 			// load dirction from PoS file
 			std::vector<vec3f> directions;
-			std::string directionFile = "/home/group1/jym/Repos/optix7course/mesh/tools/PoS_66.off";
-			loadPointsOFF(directionFile, directions);
+			std::string directionFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/PoS_66.off";
+			std::cout << "Loading direction file from: " << directionFile << std::endl; loadPointsOFF(directionFile, directions);
 			std::cout << "load directions size:  " << directions.size() << std::endl;
 			// 把 directions 归一化
 			for (auto& dir : directions) {
@@ -209,8 +209,8 @@ namespace osc {
 			// 工具球半径为 1.5，且 z>=0
 			std::vector<vec3f> tool;
 			std::vector<vec3f> carriage;
-			std::string checkPointsFile = "/home/group1/jym/Repos/optix7course/mesh/tools/ToolHeadSample_r1.off";
-			std::string carriagePointsFile = "/home/group1/jym/Repos/optix7course/mesh/tools/carriage_r1.5_r25_158.off";
+			std::string checkPointsFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/ToolHeadSample_r1.off";
+			std::string carriagePointsFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/carriage_r1.5_r25_158.off";
 			loadPointsOFF(checkPointsFile, tool);
 			loadPointsOFF(carriagePointsFile, carriage);
 			
@@ -264,17 +264,31 @@ namespace osc {
 			}
 
 			std::vector<vec3f> unreachablePoints;
+            std::vector<int> unreachableIndices; // <--- 新增：用于存储索引
 			for (size_t i = 0; i < urpsRechable.size(); i++)
 			{
 				if (urpsRechable[i] == false) {
 					/*system("pause");*/
 					unreachablePoints.push_back(urps[i]);
+                    unreachableIndices.push_back(i); // <--- 新增：记录原始索引
 				}
 			}
 			// 将不可达点写出到 OBJ 文件
 			writeOBJwithPoints(outFile, unreachablePoints);
 			std::cout << "已生成不可达点输出文件: " << outFile << " " << unreachablePoints.size() << std::endl;
 
+			std::string indexOutFile = outFile + ".indices.txt";
+			std::ofstream idxFile(indexOutFile);
+            if (idxFile.is_open()) {
+                for (int idx : unreachableIndices) {
+                    idxFile << idx << "\n";
+                }
+                idxFile.close();
+                std::cout << "已生成不可达点索引文件: " << indexOutFile << std::endl;
+            }
+            else {
+                std::cout << "无法创建索引文件: " << indexOutFile << std::endl;
+            }
 
 			auto end = std::chrono::steady_clock::now();
 			auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);

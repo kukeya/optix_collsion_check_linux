@@ -47,3 +47,4 @@ target_link_libraries(TestSingleRay
   # glfw and opengl, for display
   glfWindow
   )
+target_compile_definitions(TestSingleRay PRIVATE PROJECT_ROOT_DIR="${PROJECT_SOURCE_DIR}")
