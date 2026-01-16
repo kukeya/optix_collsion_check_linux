@@ -68,7 +68,7 @@ namespace osc {
 		bool hasNormals = false;
 		std::ifstream file(filename);
 		if (!file.is_open()) {
-			std::cerr << "ÎÞ·¨´ò¿ªÎÄ¼þ: " << filename << std::endl;
+			std::cerr << "ï¿½Þ·ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½: " << filename << std::endl;
 		}
 
 		std::string line;
@@ -77,7 +77,7 @@ namespace osc {
 			hasNormals = true;
 		}
 		else if (line != "OFF") {
-			std::cerr << "ÎÞÐ§µÄ OFF ÎÄ¼þ: " << filename << std::endl;
+			std::cerr << "ï¿½ï¿½Ð§ï¿½ï¿½ OFF ï¿½Ä¼ï¿½: " << filename << std::endl;
 			file.close();
 			return;
 		}
@@ -89,7 +89,7 @@ namespace osc {
 		for (int i = 0; i < numVertices; ++i) {
 			file >> vertex[i].x >> vertex[i].y >> vertex[i].z;
 
-			// Èç¹ûÊÇ NOFF ¸ñÊ½£¬Ìø¹ý·¨ÏòÁ¿ (nx, ny, nz)
+			// ï¿½ï¿½ï¿½ï¿½ï¿½ NOFF ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (nx, ny, nz)
 			if (hasNormals) {
 				float nx, ny, nz;
 				file >> nx >> ny >> nz;
@@ -99,9 +99,9 @@ namespace osc {
 		index.resize(numFaces);
 		for (int i = 0; i < numFaces; ++i) {
 			int vertexCount;
-			file >> vertexCount; // OFF ÃæµÄµÚÒ»¸öÊý×Ö±íÊ¾¸ÃÃæµÄ¶¥µãÊý£¬Í¨³£ÊÇ 3£¨Èý½ÇÐÎ£©
+			file >> vertexCount; // OFF ï¿½ï¿½Äµï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½Ö±ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½Ä¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½ 3ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î£ï¿½
 			if (vertexCount != 3) {
-				std::cerr << "·ÇÈý½ÇÐÎÃæ£¬µ±Ç°Ö»Ö§³ÖÈý½ÇÐÎ¡£" << std::endl;
+				std::cerr << "ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½æ£¬ï¿½ï¿½Ç°Ö»Ö§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î¡ï¿½" << std::endl;
 			}
 			file >> index[i].x >> index[i].y >> index[i].z;
 		}
@@ -145,33 +145,33 @@ namespace osc {
 	{
 		initOptix();
 
-		std::cout << "#osc: creating optix context ..." << std::endl;
+		// std::cout << "#osc: creating optix context ..." << std::endl;
 		createContext();
 
-		std::cout << "#osc: setting up module ..." << std::endl;
+		// std::cout << "#osc: setting up module ..." << std::endl;
 		createModule();
 
-		std::cout << "#osc: creating raygen programs ..." << std::endl;
+		// std::cout << "#osc: creating raygen programs ..." << std::endl;
 		createRaygenPrograms();
-		std::cout << "#osc: creating miss programs ..." << std::endl;
+		// std::cout << "#osc: creating miss programs ..." << std::endl;
 		createMissPrograms();
-		std::cout << "#osc: creating hitgroup programs ..." << std::endl;
+		// std::cout << "#osc: creating hitgroup programs ..." << std::endl;
 		createHitgroupPrograms();
 
 		launchParams.traversable = buildAccel(model);
 
-		std::cout << "#osc: setting up optix pipeline ..." << std::endl;
+		// std::cout << "#osc: setting up optix pipeline ..." << std::endl;
 		createPipeline();
 
-		std::cout << "#osc: building SBT ..." << std::endl;
+		// std::cout << "#osc: building SBT ..." << std::endl;
 		buildSBT();
 
 		launchParamsBuffer.alloc(sizeof(launchParams));
-		std::cout << "#osc: context, module, pipeline, etc, all set up ..." << std::endl;
+		// std::cout << "#osc: context, module, pipeline, etc, all set up ..." << std::endl;
 
-		std::cout << GDT_TERMINAL_GREEN;
-		std::cout << "#osc: Optix 7 Sample fully set up" << std::endl;
-		std::cout << GDT_TERMINAL_DEFAULT;
+		// std::cout << GDT_TERMINAL_GREEN;
+		// std::cout << "#osc: Optix 7 Sample fully set up" << std::endl;
+		// std::cout << GDT_TERMINAL_DEFAULT;
 	}
 
 	OptixTraversableHandle SampleRenderer::buildAccel(const TriangleMesh& model)
@@ -316,9 +316,9 @@ namespace osc {
 		// initialize optix
 		// -------------------------------------------------------
 		OPTIX_CHECK(optixInit());
-		std::cout << GDT_TERMINAL_GREEN
-			<< "#osc: successfully initialized optix... yay!"
-			<< GDT_TERMINAL_DEFAULT << std::endl;
+		// std::cout << GDT_TERMINAL_GREEN
+		// 	<< "#osc: successfully initialized optix... yay!"
+		// 	<< GDT_TERMINAL_DEFAULT << std::endl;
 	}
 
 	static void context_log_cb(unsigned int level,
@@ -346,8 +346,8 @@ namespace osc {
 			fprintf(stderr, "Error querying current context: error code %d\n", cuRes);
 
 		OPTIX_CHECK(optixDeviceContextCreate(cudaContext, 0, &optixContext));
-		OPTIX_CHECK(optixDeviceContextSetLogCallback
-		(optixContext, context_log_cb, nullptr, 4));
+		// OPTIX_CHECK(optixDeviceContextSetLogCallback
+		// (optixContext, context_log_cb, nullptr, 4));
 	}
 
 
@@ -589,7 +589,7 @@ namespace osc {
 
 			launchParams.pointOffset = (int)offset;
 			//launchParams.pointCount = (int)nPoints;
-			// ·ÖÅäºÍÉÏ´«¿Õ¼äµã
+			// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï´ï¿½ï¿½Õ¼ï¿½ï¿½
 			launchParamsBuffer.upload(&launchParams, 1);
 
 			OPTIX_CHECK(optixLaunch(/*! pipeline we're launching launch: */
