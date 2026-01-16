@@ -292,7 +292,27 @@ namespace osc {
 
 			auto end = std::chrono::steady_clock::now();
 			auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
-			std::cout << "耗时: " << elapsed.count() << " 秒" << std::endl;
+			float time = elapsed.count();
+			std::cout << "耗时: " << time << " 秒" << std::endl;
+
+			// 获取 modelFile 的父目录并写入耗时信息
+            // std::string parentDir;
+            // size_t lastSlash = modelFile.find_last_of("/\\");
+            // if (lastSlash != std::string::npos) {
+            //     parentDir = modelFile.substr(0, lastSlash);
+            // } else {
+            //     parentDir = "."; // 如果找不到斜杠，假设在当前目录
+            // }
+
+            // std::string timeLogFile = parentDir + "/time_log.txt";
+            // std::ofstream timeOut(timeLogFile);
+            // if (timeOut.is_open()) {
+            //     timeOut << time << " 秒" << std::endl;
+            //     timeOut.close();
+            //     std::cout << "已生成耗时记录文件: " << timeLogFile << std::endl;
+            // } else {
+            //     std::cout << "无法创建耗时记录文件: " << timeLogFile << std::endl;
+            // }
 
 			return 0;
 
