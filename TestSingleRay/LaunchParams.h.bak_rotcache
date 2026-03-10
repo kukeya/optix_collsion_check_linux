@@ -52,6 +52,7 @@ namespace osc {
 
 		vec3f pos;
 		vec3f dir;
+
 		vec3f* urps;
 		int numUrps;
 		vec3f* directions;
@@ -60,8 +61,6 @@ namespace osc {
 		int numToolSamplePoints;
 		vec3f* carriage;
 		int numCarriagePoints;
-		vec3f* rotatedToolByDir;
-		vec3f* rotatedCarriageByDir;
 		int pointOffset;
 		//int pointCount;
 

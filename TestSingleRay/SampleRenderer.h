@@ -63,9 +63,10 @@ namespace osc {
 		// publicly accessible interface
 		// ------------------------------------------------------------------
 	public:
-		/*! constructor - performs all setup, including initializing
-		  optix, creates module, pipeline, programs, SBT, etc. */
-		SampleRenderer(const TriangleMesh& model);
+			/*! constructor - performs all setup, including initializing
+			  optix, creates module, pipeline, programs, SBT, etc. */
+			SampleRenderer(const TriangleMesh& model);
+			void setModel(const TriangleMesh& model);
 
 		/*! render one frame */
 		void render();
@@ -89,7 +90,9 @@ namespace osc {
 		void uploadArray(std::vector<vec3f>& checkPoints,
 			std::vector<vec3f>& directions,
 			std::vector<vec3f>& toolSamplePoints,
-			std::vector<vec3f> carriage);
+			const std::vector<vec3f>& carriage,
+			const std::vector<vec3f>& rotatedToolByDir,
+			const std::vector<vec3f>& rotatedCarriageByDir);
 
 	protected:
 		// ------------------------------------------------------------------
@@ -172,15 +175,15 @@ namespace osc {
 		CUDABuffer directionBuffer;
 		CUDABuffer toolSampleBuffer;
 		CUDABuffer carriageBuffer;
+		CUDABuffer rotatedToolByDirBuffer;
+		CUDABuffer rotatedCarriageByDirBuffer;
 
 
 		/*! the camera we are to render with. */
 		Camera lastSetCamera;
 
-		/*! the model we are going to trace rays against */
-		const TriangleMesh model;
-		CUDABuffer vertexBuffer;
-		CUDABuffer indexBuffer;
+			CUDABuffer vertexBuffer;
+			CUDABuffer indexBuffer;
 		//! buffer that keeps the (final, compacted) accel structure
 		CUDABuffer asBuffer;
 	};

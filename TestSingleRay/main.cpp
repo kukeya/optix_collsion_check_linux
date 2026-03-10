@@ -14,140 +14,198 @@
 // limitations under the License.                                           //
 // ======================================================================== //
 
-#include "glfWindow/GLFWindow.h"
 #include "SampleRenderer.h"
 #include "utils.h"
-// our helper library for window handling
-#include <GL/gl.h>
-#include <chrono>
-#include <fstream>
 
-/*! \namespace osc - Optix Siggraph Course */
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
 namespace osc {
 
-
 	struct Cutter {
-		float ball_r = 1.5;         // 球半径
-		float carriage_r = 25;      // 滑台半径
-		float carriage_height = 30; // 滑台高度
-		float cylinder_height = 23; // 圆柱高度
-		float scale_factor = 0.01;
+		float ball_r = 1.5f;
+		float scale_factor = 0.01f;
 	};
 
-	struct SampleWindow : public GLFCameraWindow
+	struct CollisionRequest {
+		std::string modelFile;
+		std::string urpFile;
+		std::string outFile;
+		float scaleFactor = 0.01f;
+		std::string requestId;
+	};
+
+	struct CollisionResult {
+		int unreachableCount = 0;
+		double elapsedMs = 0.0;
+		std::string indicesFile;
+	};
+
+	static inline bool fileExists(const std::string& path)
 	{
-		SampleWindow(const std::string& title,
-			const TriangleMesh& model,
-			const Camera& camera,
-			const float worldScale)
-			: GLFCameraWindow(title, camera.from, camera.at, camera.up, worldScale),
-			sample(model)
-		{
-		}
+		std::ifstream f(path.c_str());
+		return f.good();
+	}
 
-		virtual void render() override
-		{
-			if (cameraFrame.modified) {
-				sample.setCamera(Camera{ cameraFrame.get_from(),
-										 cameraFrame.get_at(),
-										 cameraFrame.get_up() });
-				cameraFrame.modified = false;
+	static inline std::string trim(const std::string& s)
+	{
+		size_t b = 0;
+		while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+		size_t e = s.size();
+		while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+		return s.substr(b, e - b);
+	}
+
+	static bool extractJsonString(const std::string& line, const std::string& key, std::string& out)
+	{
+		const std::string token = "\"" + key + "\"";
+		size_t pos = line.find(token);
+		if (pos == std::string::npos) return false;
+		pos = line.find(':', pos + token.size());
+		if (pos == std::string::npos) return false;
+		++pos;
+		while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+		if (pos >= line.size() || line[pos] != '"') return false;
+		++pos;
+
+		std::string value;
+		value.reserve(64);
+		while (pos < line.size()) {
+			char c = line[pos++];
+			if (c == '\\') {
+				if (pos < line.size()) value.push_back(line[pos++]);
+				continue;
 			}
-			sample.render();
-		}
-
-		virtual void draw() override
-		{
-			return;
-			////////////////////////////////////////////////////////////
-
-			sample.downloadPixels(pixels.data());
-			if (fbTexture == 0)
-				glGenTextures(1, &fbTexture);
-
-			glBindTexture(GL_TEXTURE_2D, fbTexture);
-			GLenum texFormat = GL_RGBA;
-			GLenum texelType = GL_UNSIGNED_BYTE;
-			glTexImage2D(GL_TEXTURE_2D, 0, texFormat, fbSize.x, fbSize.y, 0, GL_RGBA,
-				texelType, pixels.data());
-
-			glDisable(GL_LIGHTING);
-			glColor3f(1, 1, 1);
-
-			glMatrixMode(GL_MODELVIEW);
-			glLoadIdentity();
-
-			glEnable(GL_TEXTURE_2D);
-			glBindTexture(GL_TEXTURE_2D, fbTexture);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-			glDisable(GL_DEPTH_TEST);
-
-			glViewport(0, 0, fbSize.x, fbSize.y);
-
-			glMatrixMode(GL_PROJECTION);
-			glLoadIdentity();
-			glOrtho(0.f, (float)fbSize.x, 0.f, (float)fbSize.y, -1.f, 1.f);
-
-			glBegin(GL_QUADS);
-			{
-				glTexCoord2f(0.f, 0.f);
-				glVertex3f(0.f, 0.f, 0.f);
-
-				glTexCoord2f(0.f, 1.f);
-				glVertex3f(0.f, (float)fbSize.y, 0.f);
-
-				glTexCoord2f(1.f, 1.f);
-				glVertex3f((float)fbSize.x, (float)fbSize.y, 0.f);
-
-				glTexCoord2f(1.f, 0.f);
-				glVertex3f((float)fbSize.x, 0.f, 0.f);
+			if (c == '"') {
+				out = value;
+				return true;
 			}
-			glEnd();
+			value.push_back(c);
 		}
+		return false;
+	}
 
-		virtual void resize(const vec2i& newSize)
-		{
-			fbSize = newSize;
-			sample.resize(newSize);
-			pixels.resize(newSize.x * newSize.y);
-			hitIDs.resize(newSize.x * newSize.y);
+	static bool extractJsonFloat(const std::string& line, const std::string& key, float& out)
+	{
+		const std::string token = "\"" + key + "\"";
+		size_t pos = line.find(token);
+		if (pos == std::string::npos) return false;
+		pos = line.find(':', pos + token.size());
+		if (pos == std::string::npos) return false;
+		++pos;
+		while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+		if (pos >= line.size()) return false;
+
+		char* endPtr = nullptr;
+		const char* beginPtr = line.c_str() + pos;
+		const float value = std::strtof(beginPtr, &endPtr);
+		if (endPtr == beginPtr) return false;
+		out = value;
+		return true;
+	}
+
+	static std::string jsonEscape(const std::string& in)
+	{
+		std::string out;
+		out.reserve(in.size() + 8);
+		for (size_t i = 0; i < in.size(); ++i) {
+			const char c = in[i];
+			if (c == '\\' || c == '"') {
+				out.push_back('\\');
+				out.push_back(c);
+			}
+			else if (c == '\n') {
+				out += "\\n";
+			}
+			else if (c == '\r') {
+				out += "\\r";
+			}
+			else {
+				out.push_back(c);
+			}
 		}
+		return out;
+	}
 
-		vec2i                 fbSize;
-		GLuint                fbTexture{ 0 };
-		SampleRenderer        sample;
-		std::vector<uint32_t> pixels;
-		std::vector<uint32_t> hitIDs;
-		std::vector<int> reachable;
-	};
+	static bool parseRequestJson(const std::string& line, CollisionRequest& req, std::string& err)
+	{
+		if (!extractJsonString(line, "model_file", req.modelFile)) {
+			err = "missing or invalid field: model_file";
+			return false;
+		}
+		if (!extractJsonString(line, "urps_file", req.urpFile)) {
+			err = "missing or invalid field: urps_file";
+			return false;
+		}
+		if (!extractJsonString(line, "output_file", req.outFile)) {
+			err = "missing or invalid field: output_file";
+			return false;
+		}
+		req.scaleFactor = 0.01f;
+		(void)extractJsonFloat(line, "factor", req.scaleFactor);
+		req.requestId.clear();
+		(void)extractJsonString(line, "request_id", req.requestId);
+		return true;
+	}
 
 	struct SampleIntersection {
 		SampleIntersection(const TriangleMesh& model,
-			std::vector<vec3f>& checkPoints,
-			std::vector<vec3f>& directions,
-			std::vector<vec3f>& toolSamplePoints,
-			std::vector<vec3f> carriage) : sample(model), checkPoints(checkPoints), directions(directions), toolSamplePoints(toolSamplePoints), carriage(carriage) {
-			/*auto slp = sample.getLaunchParams();
-			slp->urps = checkPoints.data();
-			slp->numUrps = checkPoints.size();
-			slp->toolSample = toolSamplePoints.data();
-			slp->numToolSamplePoints = toolSamplePoints.size();
-			slp->directions = directions.data();
-			slp->numDirections = directions.size();*/
-			resize(vec3i(checkPoints.size(), directions.size(), toolSamplePoints.size()));
-		};
+			const std::vector<vec3f>& checkPoints,
+			const std::vector<vec3f>& directions,
+			const std::vector<vec3f>& toolSamplePoints,
+			const std::vector<vec3f>& carriage,
+			const std::vector<vec3f>& rotatedToolByDir,
+			const std::vector<vec3f>& rotatedCarriageByDir)
+			: sample(model)
+		{
+			setToolConfig(directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir);
+			setCheckPoints(checkPoints);
+		}
 
-		void render() {
-			sample.uploadArray(checkPoints, directions, toolSamplePoints, carriage);
+		void setModel(const TriangleMesh& model)
+		{
+			sample.setModel(model);
+		}
+
+		void setToolConfig(const std::vector<vec3f>& newDirections,
+			const std::vector<vec3f>& newTool,
+			const std::vector<vec3f>& newCarriage,
+			const std::vector<vec3f>& newRotatedToolByDir,
+			const std::vector<vec3f>& newRotatedCarriageByDir)
+		{
+			directions = newDirections;
+			toolSamplePoints = newTool;
+			carriage = newCarriage;
+			rotatedToolByDir = newRotatedToolByDir;
+			rotatedCarriageByDir = newRotatedCarriageByDir;
+			resize(vec3i((int)checkPoints.size(), (int)directions.size(), 1));
+		}
+
+		void setCheckPoints(const std::vector<vec3f>& newCheckPoints)
+		{
+			checkPoints = newCheckPoints;
+			resize(vec3i((int)checkPoints.size(), (int)directions.size(), 1));
+		}
+
+		void render()
+		{
+			sample.uploadArray(checkPoints, directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir);
 			sample.render();
 		}
 
-		void resize(const vec3i& newSize) {
+		void resize(const vec3i& newSize)
+		{
 			fbSize = newSize;
 			sample.resize(newSize);
-			reachable.resize(newSize.x * newSize.y * newSize.z);
+			reachable.resize(newSize.x);
 		}
 
 		vec3i                 fbSize;
@@ -157,172 +215,256 @@ namespace osc {
 		std::vector<vec3f>    directions;
 		std::vector<vec3f>    toolSamplePoints;
 		std::vector<vec3f>    carriage;
+		std::vector<vec3f>    rotatedToolByDir;
+		std::vector<vec3f>    rotatedCarriageByDir;
 	};
 
-	/*! main entry point to this example - initially optix, print hello
-	  world, then exit */
-	extern "C" int main(int ac, char** av)
-	{
-
-		std::string modelFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_n.off";
-		std::string urpFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_urps_n.off";
-		std::string outFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_output_collision.obj";
-
-		/*std::string modelFile = "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\test_scaled.off" "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\sample_scaled.off" "D:\\Repos\\testCuda\\modelFile\\debug_normal_collison\\output_scaled.obj"*/
-
-
-		if (ac > 1) modelFile = av[1];
-		if (ac > 2) urpFile = av[2];
-		if (ac > 3) outFile = av[3];
-
-		if (ac < 4) {
-			std::cout << "未检测到全部命令行参数，使用默认文件路径" << std::endl;
-			std::cout << "模型文件: " << modelFile << std::endl;
-			std::cout << "URP文件: " << urpFile << std::endl;
-			std::cout << "输出文件: " << outFile << std::endl;
-		}
-
-		try {
+	class CollisionEngine {
+	public:
+		bool runRequest(const CollisionRequest& req, CollisionResult& result, std::string& err)
+		{
 			auto start = std::chrono::steady_clock::now();
-			 
-			Cutter cutter;
+			if (!loadStaticAssets(err)) return false;
+			if (!fileExists(req.modelFile)) {
+				err = "model file not found: " + req.modelFile;
+				return false;
+			}
+			if (!fileExists(req.urpFile)) {
+				err = "urps file not found: " + req.urpFile;
+				return false;
+			}
 
 			TriangleMesh model;
-			model.loadOFF(modelFile);
-
-			// load dirction from PoS file
-			std::vector<vec3f> directions;
-			std::string directionFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/PoS_66.off";
-			std::cout << "Loading direction file from: " << directionFile << std::endl; loadPointsOFF(directionFile, directions);
-			std::cout << "load directions size:  " << directions.size() << std::endl;
-			// 把 directions 归一化
-			for (auto& dir : directions) {
-				dir = normalize(dir);
+			std::string modelFileCopy = req.modelFile;
+			model.loadOFF(modelFileCopy);
+			if (model.vertex.empty() || model.index.empty()) {
+				err = "failed to load model or model is empty: " + req.modelFile;
+				return false;
 			}
 
-			// load urp from file
 			std::vector<vec3f> urps;
-			loadPointsOFF(urpFile, urps);
+			loadPointsOFF(req.urpFile, urps);
 			std::cout << "load urps size:  " << urps.size() << std::endl;
 
-			// load tool from ToolHeadSample_r1 file
-			// 工具球半径为 1.5，且 z>=0
 			std::vector<vec3f> tool;
 			std::vector<vec3f> carriage;
-			std::string checkPointsFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/ToolHeadSample_r1.off";
-			std::string carriagePointsFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/carriage_r1.5_r25_158.off";
-			loadPointsOFF(checkPointsFile, tool);
-			loadPointsOFF(carriagePointsFile, carriage);
-			
-			// 按比例缩放 tool 与 carriage
-			float tool_f = cutter.scale_factor * cutter.ball_r;
-			for (auto& p : tool) {
-				p *= tool_f;
+			std::vector<vec3f> rotatedToolByDir;
+			std::vector<vec3f> rotatedCarriageByDir;
+			prepareScaledTooling(req.scaleFactor, tool, carriage, rotatedToolByDir, rotatedCarriageByDir);
+
+			if (!sampleInterMachine) {
+				sampleInterMachine.reset(new SampleIntersection(model,
+					std::vector<vec3f>(),
+					directions,
+					tool,
+					carriage,
+					rotatedToolByDir,
+					rotatedCarriageByDir));
+				loadedModelFile = req.modelFile;
 			}
-
-			float carriage_f = cutter.scale_factor;
-			for (auto& p : carriage) {
-				p *= carriage_f;
+			else if (loadedModelFile != req.modelFile) {
+				sampleInterMachine->setModel(model);
+				loadedModelFile = req.modelFile;
 			}
+			sampleInterMachine->setToolConfig(directions, tool, carriage, rotatedToolByDir, rotatedCarriageByDir);
 
-			// 分批处理以避免占用过多内存
-			const size_t batchSize = 10000; // 每批处理 10000 个点
-			std::vector<bool> urpsRechable(urps.size());
-
+			const size_t batchSize = std::min<size_t>(urps.size(), 50000);
+			std::vector<bool> urpsReachable(urps.size(), false);
 			for (size_t batchStart = 0; batchStart < urps.size(); batchStart += batchSize) {
 				size_t batchEnd = std::min(batchStart + batchSize, urps.size());
 				std::vector<vec3f> urpsBatch(urps.begin() + batchStart, urps.begin() + batchEnd);
 
 				std::cout << "处理批次: " << batchStart << " - " << batchEnd << std::endl;
-
-				SampleIntersection* sampleInterMachine = new SampleIntersection(model, urpsBatch, directions, tool, carriage);
+				sampleInterMachine->setCheckPoints(urpsBatch);
 				sampleInterMachine->render();
 				sampleInterMachine->sample.downloadReachable(sampleInterMachine->reachable.data());
 
-				// 汇总当前批次的结果
-				for (size_t i = 0; i < urpsBatch.size(); i++) {
-					size_t globalIdx = batchStart + i;
-					bool pointReachable = false;
-					for (int d = 0; d < directions.size(); d++) {
-						bool directionNoHit = false;
-						for (int t = 0; t < tool.size(); t++) {
-							int idx = t + d * tool.size() + i * directions.size() * tool.size();
-							if (sampleInterMachine->reachable[idx] != 0) {
-								directionNoHit = true;
-								break;
-							}
-						}
-						if (directionNoHit) {
-							pointReachable = true;
-							break;
-						}
-					}
-					urpsRechable[globalIdx] = pointReachable;
+				for (size_t i = 0; i < urpsBatch.size(); ++i) {
+					urpsReachable[batchStart + i] = (sampleInterMachine->reachable[i] != 0);
 				}
-
-				delete sampleInterMachine;
 			}
 
 			std::vector<vec3f> unreachablePoints;
-            std::vector<int> unreachableIndices; // <--- 新增：用于存储索引
-			for (size_t i = 0; i < urpsRechable.size(); i++)
-			{
-				if (urpsRechable[i] == false) {
-					/*system("pause");*/
+			std::vector<int> unreachableIndices;
+			unreachablePoints.reserve(urps.size());
+			unreachableIndices.reserve(urps.size());
+			for (size_t i = 0; i < urpsReachable.size(); ++i) {
+				if (!urpsReachable[i]) {
 					unreachablePoints.push_back(urps[i]);
-                    unreachableIndices.push_back(i); // <--- 新增：记录原始索引
+					unreachableIndices.push_back((int)i);
 				}
 			}
-			// 将不可达点写出到 OBJ 文件
-			writeOBJwithPoints(outFile, unreachablePoints);
-			std::cout << "已生成不可达点输出文件: " << outFile << " " << unreachablePoints.size() << std::endl;
 
-			std::string indexOutFile = outFile + ".indices.txt";
-			std::ofstream idxFile(indexOutFile);
-            if (idxFile.is_open()) {
-                for (int idx : unreachableIndices) {
-                    idxFile << idx << "\n";
-                }
-                idxFile.close();
-                std::cout << "已生成不可达点索引文件: " << indexOutFile << std::endl;
-            }
-            else {
-                std::cout << "无法创建索引文件: " << indexOutFile << std::endl;
-            }
+			writeOBJwithPoints(req.outFile, unreachablePoints);
+			std::cout << "已生成不可达点输出文件: " << req.outFile << " " << unreachablePoints.size() << std::endl;
+
+			const std::string indexOutFile = req.outFile + ".indices.txt";
+			std::ofstream idxFile(indexOutFile.c_str(), std::ios::out | std::ios::trunc);
+			if (!idxFile.is_open()) {
+				err = "failed to create index file: " + indexOutFile;
+				return false;
+			}
+			for (size_t i = 0; i < unreachableIndices.size(); ++i) {
+				idxFile << unreachableIndices[i] << "\n";
+			}
+			idxFile.close();
+			std::cout << "已生成不可达点索引文件: " << indexOutFile << std::endl;
 
 			auto end = std::chrono::steady_clock::now();
-			auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
-			float time = elapsed.count();
-			std::cout << "耗时: " << time << " 秒" << std::endl;
-
-			// 获取 modelFile 的父目录并写入耗时信息
-            // std::string parentDir;
-            // size_t lastSlash = modelFile.find_last_of("/\\");
-            // if (lastSlash != std::string::npos) {
-            //     parentDir = modelFile.substr(0, lastSlash);
-            // } else {
-            //     parentDir = "."; // 如果找不到斜杠，假设在当前目录
-            // }
-
-            // std::string timeLogFile = parentDir + "/time_log.txt";
-            // std::ofstream timeOut(timeLogFile);
-            // if (timeOut.is_open()) {
-            //     timeOut << time << " 秒" << std::endl;
-            //     timeOut.close();
-            //     std::cout << "已生成耗时记录文件: " << timeLogFile << std::endl;
-            // } else {
-            //     std::cout << "无法创建耗时记录文件: " << timeLogFile << std::endl;
-            // }
-
-			return 0;
-
+			result.unreachableCount = (int)unreachablePoints.size();
+			result.indicesFile = indexOutFile;
+			result.elapsedMs = std::chrono::duration_cast<std::chrono::duration<double, std::milli> >(end - start).count();
+			std::cout << "耗时: " << (int)(result.elapsedMs / 1000.0) << " 秒" << std::endl;
+			return true;
 		}
-		catch (std::runtime_error& e) {
-			std::cout << GDT_TERMINAL_RED << "FATAL ERROR: " << e.what()
-				<< GDT_TERMINAL_DEFAULT << std::endl;
-			exit(1);
+
+	private:
+		bool loadStaticAssets(std::string& err)
+		{
+			if (staticAssetsLoaded) return true;
+
+			const std::string directionFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/PoS_66.off";
+			std::cout << "Loading direction file from: " << directionFile << std::endl;
+			loadPointsOFF(directionFile, directions);
+			if (directions.empty()) {
+				err = "failed to load direction file: " + directionFile;
+				return false;
+			}
+			for (size_t i = 0; i < directions.size(); ++i) {
+				directions[i] = normalize(directions[i]);
+			}
+			std::cout << "load directions size:  " << directions.size() << std::endl;
+
+			const std::string toolFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/ToolHeadSample_r1.off";
+			const std::string carriageFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/carriage_r1.5_r25_158.off";
+			loadPointsOFF(toolFile, baseToolPoints);
+			loadPointsOFF(carriageFile, baseCarriagePoints);
+			if (baseToolPoints.empty() || baseCarriagePoints.empty()) {
+				err = "failed to load tool assets";
+				return false;
+			}
+
+			staticAssetsLoaded = true;
+			return true;
+		}
+
+		void prepareScaledTooling(float scaleFactor,
+			std::vector<vec3f>& tool,
+			std::vector<vec3f>& carriage,
+			std::vector<vec3f>& rotatedToolByDir,
+			std::vector<vec3f>& rotatedCarriageByDir)
+		{
+			tool = baseToolPoints;
+			carriage = baseCarriagePoints;
+			const float toolScale = scaleFactor * cutter.ball_r;
+			const float carriageScale = scaleFactor;
+
+			for (size_t i = 0; i < tool.size(); ++i) tool[i] *= toolScale;
+			for (size_t i = 0; i < carriage.size(); ++i) carriage[i] *= carriageScale;
+
+			rotatedToolByDir.resize(directions.size() * tool.size());
+			rotatedCarriageByDir.resize(directions.size() * carriage.size());
+			for (size_t d = 0; d < directions.size(); ++d) {
+				for (size_t t = 0; t < tool.size(); ++t) {
+					rotateToolPoint(tool[t], directions[d], rotatedToolByDir[d * tool.size() + t]);
+				}
+				for (size_t c = 0; c < carriage.size(); ++c) {
+					rotateToolPoint(carriage[c], directions[d], rotatedCarriageByDir[d * carriage.size() + c]);
+				}
+			}
+		}
+
+		Cutter cutter;
+		bool staticAssetsLoaded = false;
+		std::vector<vec3f> directions;
+		std::vector<vec3f> baseToolPoints;
+		std::vector<vec3f> baseCarriagePoints;
+		std::unique_ptr<SampleIntersection> sampleInterMachine;
+		std::string loadedModelFile;
+	};
+
+	static int runServerMode()
+	{
+		std::streambuf* protocolOutBuf = std::cout.rdbuf();
+		std::cout.rdbuf(std::cerr.rdbuf());
+		std::ostream protocolOut(protocolOutBuf);
+
+		CollisionEngine engine;
+		std::string line;
+		while (std::getline(std::cin, line)) {
+			line = trim(line);
+			if (line.empty()) continue;
+
+			CollisionRequest req;
+			std::string parseErr;
+			if (!parseRequestJson(line, req, parseErr)) {
+				std::string reqId;
+				(void)extractJsonString(line, "request_id", reqId);
+				protocolOut << "{\"ok\":false,\"request_id\":\"" << jsonEscape(reqId)
+					<< "\",\"error\":\"" << jsonEscape(parseErr) << "\"}" << std::endl;
+				continue;
+			}
+
+			CollisionResult result;
+			std::string err;
+			const bool ok = engine.runRequest(req, result, err);
+			if (ok) {
+				protocolOut << "{\"ok\":true,\"request_id\":\"" << jsonEscape(req.requestId)
+					<< "\",\"indices_file\":\"" << jsonEscape(result.indicesFile)
+					<< "\",\"unreachable_count\":" << result.unreachableCount
+					<< ",\"elapsed_ms\":" << result.elapsedMs << "}" << std::endl;
+			}
+			else {
+				protocolOut << "{\"ok\":false,\"request_id\":\"" << jsonEscape(req.requestId)
+					<< "\",\"error\":\"" << jsonEscape(err) << "\"}" << std::endl;
+			}
 		}
 		return 0;
 	}
 
-}
+	static int runCliOnce(int ac, char** av)
+	{
+		CollisionRequest req;
+		req.modelFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_n.off";
+		req.urpFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_urps_n.off";
+		req.outFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_output_collision.obj";
+		req.scaleFactor = 0.01f;
+
+		if (ac > 1) req.modelFile = av[1];
+		if (ac > 2) req.urpFile = av[2];
+		if (ac > 3) req.outFile = av[3];
+		if (ac > 4) req.scaleFactor = std::stof(av[4]);
+
+		if (ac < 5) {
+			std::cout << "未检测到全部命令行参数，使用默认文件路径" << std::endl;
+			std::cout << "模型文件: " << req.modelFile << std::endl;
+			std::cout << "URP文件: " << req.urpFile << std::endl;
+			std::cout << "输出文件: " << req.outFile << std::endl;
+			std::cout << "缩放比例: " << req.scaleFactor << std::endl;
+		}
+
+		CollisionEngine engine;
+		CollisionResult result;
+		std::string err;
+		if (!engine.runRequest(req, result, err)) {
+			throw std::runtime_error(err);
+		}
+		return 0;
+	}
+
+	extern "C" int main(int ac, char** av)
+	{
+		try {
+			if (ac > 1 && std::string(av[1]) == "--server") {
+				return runServerMode();
+			}
+			return runCliOnce(ac, av);
+		}
+		catch (std::runtime_error& e) {
+			std::cerr << GDT_TERMINAL_RED << "FATAL ERROR: " << e.what()
+				<< GDT_TERMINAL_DEFAULT << std::endl;
+			return 1;
+		}
+	}
+
+} // namespace osc

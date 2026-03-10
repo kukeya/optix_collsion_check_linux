@@ -52,6 +52,7 @@ namespace osc {
 
 		vec3f pos;
 		vec3f dir;
+
 		vec3f* urps;
 		int numUrps;
 		vec3f* directions;

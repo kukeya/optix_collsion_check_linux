@@ -158,8 +158,6 @@ namespace osc {
 		// std::cout << "#osc: creating hitgroup programs ..." << std::endl;
 		createHitgroupPrograms();
 
-		launchParams.traversable = buildAccel(model);
-
 		// std::cout << "#osc: setting up optix pipeline ..." << std::endl;
 		createPipeline();
 
@@ -167,15 +165,20 @@ namespace osc {
 		buildSBT();
 
 		launchParamsBuffer.alloc(sizeof(launchParams));
+		setModel(model);
 		// std::cout << "#osc: context, module, pipeline, etc, all set up ..." << std::endl;
 
-		std::cout << GDT_TERMINAL_GREEN;
+		// std::cout << GDT_TERMINAL_GREEN;
 		// std::cout << "#osc: Optix 7 Sample fully set up" << std::endl;
-		std::cout << GDT_TERMINAL_DEFAULT;
+		// std::cout << GDT_TERMINAL_DEFAULT;
 	}
 
 	OptixTraversableHandle SampleRenderer::buildAccel(const TriangleMesh& model)
 	{
+		if (vertexBuffer.d_ptr) vertexBuffer.free();
+		if (indexBuffer.d_ptr) indexBuffer.free();
+		if (asBuffer.d_ptr) asBuffer.free();
+
 		// upload the model to the device: the builder
 		vertexBuffer.alloc_and_upload(model.vertex);
 		indexBuffer.alloc_and_upload(model.index);
@@ -297,6 +300,11 @@ namespace osc {
 		return asHandle;
 	}
 
+	void SampleRenderer::setModel(const TriangleMesh& model)
+	{
+		launchParams.traversable = buildAccel(model);
+	}
+
 	/*! helper function that initializes optix and checks for errors */
 	void SampleRenderer::initOptix()
 	{
@@ -346,8 +354,8 @@ namespace osc {
 			fprintf(stderr, "Error querying current context: error code %d\n", cuRes);
 
 		OPTIX_CHECK(optixDeviceContextCreate(cudaContext, 0, &optixContext));
-		OPTIX_CHECK(optixDeviceContextSetLogCallback
-		(optixContext, context_log_cb, nullptr, 4));
+		// OPTIX_CHECK(optixDeviceContextSetLogCallback
+		// (optixContext, context_log_cb, nullptr, 4));
 	}
 
 
@@ -395,7 +403,7 @@ namespace osc {
 			&module
 		));
 #endif
-		if (sizeof_log > 1) PRINT(log);
+		// if (sizeof_log > 1) PRINT(log);
 	}
 
 
@@ -422,7 +430,7 @@ namespace osc {
 			log, &sizeof_log,
 			&raygenPGs[0]
 		));
-		if (sizeof_log > 1) PRINT(log);
+		// if (sizeof_log > 1) PRINT(log);
 	}
 
 	/*! does all setup for the miss program(s) we are going to use */
@@ -447,7 +455,7 @@ namespace osc {
 			log, &sizeof_log,
 			&missPGs[0]
 		));
-		if (sizeof_log > 1) PRINT(log);
+		// if (sizeof_log > 1) PRINT(log);
 	}
 
 	/*! does all setup for the hitgroup program(s) we are going to use */
@@ -473,7 +481,7 @@ namespace osc {
 			log, &sizeof_log,
 			&hitgroupPGs[0]
 		));
-		if (sizeof_log > 1) PRINT(log);
+		// if (sizeof_log > 1) PRINT(log);
 	}
 
 
@@ -580,7 +588,7 @@ namespace osc {
 		// already done:
 		//if (launchParams.frame.size.x == 0) return;
 
-		int batchPoints = 16384;
+		const int batchPoints = 65536;
 		int totalPoints = launchParams.urpReachable.size.x;
 
 		for (int offset = 0; offset < totalPoints; offset += batchPoints)
@@ -601,7 +609,7 @@ namespace osc {
 				/*! dimensions of the launch: */
 				nPoints,
 				launchParams.urpReachable.size.y,
-				launchParams.urpReachable.size.z
+				1
 			));
 		}
 
@@ -628,7 +636,7 @@ namespace osc {
 			/*! dimensions of the launch: */
 			launchParams.urpReachable.size.x,
 			launchParams.urpReachable.size.y,
-			launchParams.urpReachable.size.z
+			1
 		));
 		// sync - make sure the frame is rendered before we download and
 		// display (obviously, for a high-performance application you
@@ -653,17 +661,34 @@ namespace osc {
 				launchParams.camera.direction));
 	}
 
-	void SampleRenderer::uploadArray(std::vector<vec3f>& checkPoints, std::vector<vec3f>& directions, std::vector<vec3f>& toolSamplePoints, std::vector<vec3f> carriage)
+	void SampleRenderer::uploadArray(std::vector<vec3f>& checkPoints,
+		std::vector<vec3f>& directions,
+		std::vector<vec3f>& toolSamplePoints,
+		const std::vector<vec3f>& carriage,
+		const std::vector<vec3f>& rotatedToolByDir,
+		const std::vector<vec3f>& rotatedCarriageByDir)
 	{
-		// upload the model to the device: the builder
-		urpsBuffer.alloc_and_upload(checkPoints);
-		directionBuffer.alloc_and_upload(directions);
-		toolSampleBuffer.alloc_and_upload(toolSamplePoints);
-		carriageBuffer.alloc_and_upload(carriage);
+		auto uploadVec3fBuffer = [](CUDABuffer& buffer, const std::vector<vec3f>& data) {
+			const size_t requiredSize = data.size() * sizeof(vec3f);
+			if (buffer.sizeInBytes != requiredSize) {
+				if (buffer.d_ptr) buffer.free();
+				if (requiredSize > 0) buffer.alloc(requiredSize);
+			}
+			if (requiredSize > 0) buffer.upload(data.data(), data.size());
+		};
+
+		uploadVec3fBuffer(urpsBuffer, checkPoints);
+		uploadVec3fBuffer(directionBuffer, directions);
+		uploadVec3fBuffer(toolSampleBuffer, toolSamplePoints);
+		uploadVec3fBuffer(carriageBuffer, carriage);
+		uploadVec3fBuffer(rotatedToolByDirBuffer, rotatedToolByDir);
+		uploadVec3fBuffer(rotatedCarriageByDirBuffer, rotatedCarriageByDir);
 		launchParams.urps = (vec3f*)urpsBuffer.d_pointer();
 		launchParams.directions = (vec3f*)directionBuffer.d_pointer();
 		launchParams.toolSample = (vec3f*)toolSampleBuffer.d_pointer();
 		launchParams.carriage = (vec3f*)carriageBuffer.d_pointer();
+		launchParams.rotatedToolByDir = (vec3f*)rotatedToolByDirBuffer.d_pointer();
+		launchParams.rotatedCarriageByDir = (vec3f*)rotatedCarriageByDirBuffer.d_pointer();
 		launchParams.numUrps = (int)checkPoints.size();
 		launchParams.numDirections = (int)directions.size();
 		launchParams.numToolSamplePoints = (int)toolSamplePoints.size();
@@ -703,15 +728,15 @@ namespace osc {
 		//if (newSize.x == 0 || newSize.y == 0) return;
 
 		// resize our cuda frame buffer
-		reachableBuffer.resize(newSize.x * newSize.y * newSize.z * sizeof(int));
+		const size_t pointReachableBytes = (size_t)newSize.x * sizeof(int);
+		if (reachableBuffer.sizeInBytes != pointReachableBytes) {
+			reachableBuffer.resize(pointReachableBytes);
+		}
 		{
-			cudaError_t rc = cudaMemset(reachableBuffer.d_ptr, 1, newSize.x * newSize.y * newSize.z * sizeof(int)); if (rc != cudaSuccess) {
+			cudaError_t rc = cudaMemset(reachableBuffer.d_ptr, 0, pointReachableBytes); if (rc != cudaSuccess) {
 				std::stringstream txt; cudaError_t err = rc; txt << "CUDA Error " << cudaGetErrorName(err) << " (" << cudaGetErrorString(err) << ")"; throw std::runtime_error(txt.str());
 			}
 		};
-
-		std::vector<int> test(newSize.x * newSize.y * newSize.z);
-		reachableBuffer.download(test.data(), newSize.x * newSize.y * newSize.z);
 
 		launchParams.urpReachable.size = newSize;
 		launchParams.urpReachable.reachable = (int*)reachableBuffer.d_pointer();
@@ -734,7 +759,7 @@ namespace osc {
 	void SampleRenderer::downloadReachable(int h_reachable[])
 	{
 		reachableBuffer.download(h_reachable,
-			launchParams.urpReachable.size.x * launchParams.urpReachable.size.y * launchParams.urpReachable.size.z);
+			launchParams.urpReachable.size.x);
 	}
 
 } // ::osc

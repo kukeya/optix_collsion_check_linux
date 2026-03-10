@@ -149,152 +149,112 @@ namespace osc {
 	extern "C" __global__ void __raygen__renderFrame()
 	{
 		const uint3 idx = optixGetLaunchIndex();
-		//const int p_idx = idx.x;
 		const int d_idx = idx.y;
-		const int t_idx = idx.z;
 		const int p_idx = idx.x + optixLaunchParams.pointOffset;
-		//printf("(p_idx: %d, d_idx: %d, t_idx: %d)\n", p_idx, d_idx, t_idx);
-		// 读取当前空间点、方向和刀头采样点
+		int* pointReachable = &optixLaunchParams.urpReachable.reachable[p_idx];
+		if (*pointReachable != 0) return;
+
 		const vec3f p = optixLaunchParams.urps[p_idx];
 		const vec3f currentDir = optixLaunchParams.directions[d_idx];
-		const vec3f toolSample = optixLaunchParams.toolSample[t_idx];
-
-
-		// 以当前候选刀触点（toolSample）作为对齐点，计算刀具的“原点”
-		// 旋转当前刀头采样点，使其与当前方向对齐
-		vec3f rotatedToolSample;
-		rotateToolPoint(toolSample, currentDir, rotatedToolSample);
-		// 假设我们希望将当前候选点与 p 对齐，则刀头原点为：
-		vec3f toolOrigin = p - rotatedToolSample;
-
-		// 计算carriage的碰撞，先计算全局碰撞
-		//printf("jump carriage!!!!!!!!!\n");
-		int numCarriagePoints = optixLaunchParams.numCarriagePoints;
-		vec3f* carriagePoints = optixLaunchParams.carriage;
-		vec3f rotatedCarriagePoint;
-		bool isToolCarrigeHit = false;
-		for (int i = 0; i < numCarriagePoints; i++)
-		{
-			//int hitIdPRD = 0;
-			float hitDistance = 0.0f;
-			uint32_t u0, u1;
-			packPointer(&hitDistance, u0, u1);
-
-			rotateToolPoint(carriagePoints[i], currentDir, rotatedCarriagePoint);
-			const vec3f rayPos = toolOrigin + rotatedCarriagePoint;
-			optixTrace(optixLaunchParams.traversable,
-				rayPos,
-				currentDir,
-				0.f,	  // tmin
-				1e20f, // tmax
-				0.0f,  // rayTime
-				OptixVisibilityMask(255),
-				OPTIX_RAY_FLAG_DISABLE_ANYHIT, // OPTIX_RAY_FLAG_NONE,
-				SURFACE_RAY_TYPE,			  // SBT offset
-				RAY_TYPE_COUNT,				  // SBT stride
-				SURFACE_RAY_TYPE,
-				u0, u1);
-
-			//const int tmpID = int(hitIdPRD);
-			//const uint32_t tmp = static_cast<uint32_t>(tmpID);
-			const float hitDist = hitDistance;
-
-			//如果tmp为0xFFFFFFFF，表示没有命中任何物体
-			if (hitDist != -1.0f)
-			{
-				const int fbIndex = t_idx + d_idx * optixLaunchParams.urpReachable.size.z +
-					p_idx * optixLaunchParams.urpReachable.size.y * optixLaunchParams.urpReachable.size.z;
-				/*printf("Hit at fbIndex: %d (p_idx: %d, d_idx: %d, t_idx: %d), numTool: %d\n",
-					fbIndex, p_idx, d_idx, t_idx, i);*/
-				atomicAnd(&optixLaunchParams.urpReachable.reachable[fbIndex], 0);
-				LOG("break carriage, %d,%d,%d,%f\n", t_idx, d_idx, p_idx, hitDist);
-				
-				isToolCarrigeHit = true;
-				break;
-			}
-		}
-		if (isToolCarrigeHit) return;
-
-		// 刀头原点发射一条，如果碰撞说明刀柄一定碰撞
-		bool isHandleHit = false;
-		//int testHandlePRD = 0;
-		float testHandleDistance = 0.0f;
-		uint32_t handle0, handle1;
-		packPointer(&testHandleDistance, handle0, handle1);
-		optixTrace(optixLaunchParams.traversable,
-			toolOrigin,
-			currentDir,
-			0.f,	  // tmin
-			1e20f, // tmax
-			0.0f,  // rayTime
-			OptixVisibilityMask(255),
-			OPTIX_RAY_FLAG_DISABLE_ANYHIT, // OPTIX_RAY_FLAG_NONE,
-			SURFACE_RAY_TYPE,			  // SBT offset
-			RAY_TYPE_COUNT,				  // SBT stride
-			SURFACE_RAY_TYPE,
-			handle0, handle1);
-		/*const int handleHitID = int(testHandlePRD);
-		const uint32_t handleHit = static_cast<uint32_t>(handleHitID);*/
-		const float testHandleDist = testHandleDistance;
-
-		//如果handleHit为0xFFFFFFFF，表示没有命中任何物体
-		if (testHandleDist != -1.0f)
-		{
-			const int fbIndex = t_idx + d_idx * optixLaunchParams.urpReachable.size.z +
-				p_idx * optixLaunchParams.urpReachable.size.y * optixLaunchParams.urpReachable.size.z;
-			
-			LOG("Hit handle fbIndex: %d (p_idx: %d, d_idx: %d, t_idx: %d, hitdist: %f)\n",
-				fbIndex, p_idx, d_idx, t_idx, testHandleDist);
-			
-			atomicAnd(&optixLaunchParams.urpReachable.reachable[fbIndex], 0);
-			isHandleHit = true;
-		}
-		if (isHandleHit) return;
-		
-		// 局部碰撞检测，刀头，过切无考虑
 		int numTool = optixLaunchParams.numToolSamplePoints;
-		vec3f* toolSamplePoints = optixLaunchParams.toolSample;
-		for (int i = 0; i < numTool; i++)
+		int numCarriagePoints = optixLaunchParams.numCarriagePoints;
+		vec3f* rotatedToolByDir = optixLaunchParams.rotatedToolByDir + d_idx * numTool;
+		vec3f* rotatedCarriageByDir = optixLaunchParams.rotatedCarriageByDir + d_idx * numCarriagePoints;
+
+		// One thread now handles (point, direction) and scans all tool samples.
+		for (int t_idx = 0; t_idx < numTool; ++t_idx)
 		{
-			if (t_idx == i) continue;
-			//int hitIdPRD = 0;
-			float hitDistance = 0.0f;
-			uint32_t u0, u1;
-			packPointer(&hitDistance, u0, u1);
+			if (*pointReachable != 0) return;
 
-			rotateToolPoint(toolSamplePoints[i], currentDir, rotatedToolSample);
-			const vec3f rayPos = toolOrigin + rotatedToolSample;
-			optixTrace(optixLaunchParams.traversable,
-				rayPos,
-				currentDir,
-				0.f,	  // tmin
-				1e20f, // tmax
-				0.0f,  // rayTime
-				OptixVisibilityMask(255),
-				OPTIX_RAY_FLAG_DISABLE_ANYHIT, // OPTIX_RAY_FLAG_NONE,
-				SURFACE_RAY_TYPE,			  // SBT offset
-				RAY_TYPE_COUNT,				  // SBT stride
-				SURFACE_RAY_TYPE,
-				u0, u1);
+			const vec3f toolSample = rotatedToolByDir[t_idx];
+			vec3f toolOrigin = p - toolSample;
 
-			/*const int tmpID = int(hitIdPRD);
-			const uint32_t tmp = static_cast<uint32_t>(tmpID);*/
-			const float hitDist = hitDistance;
-
-			//如果tmp为0xFFFFFFFF，表示没有命中任何物体, hitDist设置ball_r以内
-			if (hitDist != -1.0f && hitDist > 0.015f)
+			bool isToolCarrigeHit = false;
+			for (int i = 0; i < numCarriagePoints; i++)
 			{
-				LOG("hitDist, %f\n", hitDist);
-				const int fbIndex = t_idx + d_idx * optixLaunchParams.urpReachable.size.z +
-					p_idx * optixLaunchParams.urpReachable.size.y * optixLaunchParams.urpReachable.size.z;
-				/*printf("Hit at fbIndex: %d (p_idx: %d, d_idx: %d, t_idx: %d), numTool: %d\n",
-					fbIndex, p_idx, d_idx, t_idx, i);*/
-				atomicAnd(&optixLaunchParams.urpReachable.reachable[fbIndex], 0);
-				//isToolHeadHit = true;
-				break;
-			}
-		}
+						float hitDistance = 0.0f;
+						uint32_t u0, u1;
+						packPointer(&hitDistance, u0, u1);
 
+						const vec3f rayPos = toolOrigin + rotatedCarriageByDir[i];
+						optixTrace(optixLaunchParams.traversable,
+							rayPos,
+							currentDir,
+						0.f,	  // tmin
+						1e20f, // tmax
+						0.0f,  // rayTime
+						OptixVisibilityMask(255),
+						OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+					SURFACE_RAY_TYPE,
+					RAY_TYPE_COUNT,
+					SURFACE_RAY_TYPE,
+					u0, u1);
+
+				const float hitDist = hitDistance;
+
+				if (hitDist != -1.0f)
+				{
+					isToolCarrigeHit = true;
+					break;
+				}
+			}
+			if (isToolCarrigeHit) continue;
+
+					float testHandleDistance = 0.0f;
+					uint32_t handle0, handle1;
+					packPointer(&testHandleDistance, handle0, handle1);
+					optixTrace(optixLaunchParams.traversable,
+						toolOrigin,
+						currentDir,
+					0.f,
+					1e20f,
+					0.0f,
+					OptixVisibilityMask(255),
+					OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+				SURFACE_RAY_TYPE,
+				RAY_TYPE_COUNT,
+				SURFACE_RAY_TYPE,
+				handle0, handle1);
+			if (testHandleDistance != -1.0f)
+			{
+				continue;
+			}
+
+			bool isToolHeadHit = false;
+			for (int i = 0; i < numTool; i++)
+			{
+				if (t_idx == i) continue;
+							float hitDistance = 0.0f;
+							uint32_t u0, u1;
+							packPointer(&hitDistance, u0, u1);
+
+						const vec3f rayPos = toolOrigin + rotatedToolByDir[i];
+						optixTrace(optixLaunchParams.traversable,
+							rayPos,
+							currentDir,
+						0.f,
+						1e20f,
+						0.0f,
+						OptixVisibilityMask(255),
+						OPTIX_RAY_FLAG_DISABLE_ANYHIT,
+					SURFACE_RAY_TYPE,
+					RAY_TYPE_COUNT,
+					SURFACE_RAY_TYPE,
+					u0, u1);
+
+				const float hitDist = hitDistance;
+					if (hitDist != -1.0f && hitDist > 0.015f)
+					{
+						isToolHeadHit = true;
+						break;
+				}
+			}
+				if (isToolHeadHit) continue;
+
+				// Found a valid tool sample for this (point, direction).
+				atomicOr(pointReachable, 1);
+				return;
+			}
 	}
 
 } // ::osc
