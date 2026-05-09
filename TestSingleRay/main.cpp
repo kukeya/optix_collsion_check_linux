@@ -15,6 +15,7 @@
 // ======================================================================== //
 
 #include "SampleRenderer.h"
+#include "SamplingUtils.h"
 #include "utils.h"
 
 #include <algorithm>
@@ -30,17 +31,35 @@
 
 namespace osc {
 
-	struct Cutter {
-		float ball_r = 1.5f;
-		float scale_factor = 0.01f;
-	};
+	static float defaultScaleFactor()
+	{
+		return 1.0f / 35.0f;
+	}
+
+	static float defaultToolRadius()
+	{
+		return 1.5f;
+	}
 
 	struct CollisionRequest {
 		std::string modelFile;
 		std::string urpFile;
 		std::string outFile;
-		float scaleFactor = 0.01f;
+		float scaleFactor;
+		float toolRadius;
+		DirectionSamplingConfig directionSampling;
+		CarriageSamplingConfig carriageSampling;
+		int pruneBottomZMinMode;
 		std::string requestId;
+
+		CollisionRequest()
+			: scaleFactor(defaultScaleFactor())
+			, toolRadius(defaultToolRadius())
+			, directionSampling()
+			, carriageSampling()
+			, pruneBottomZMinMode(-1)
+		{
+		}
 	};
 
 	struct CollisionResult {
@@ -112,6 +131,72 @@ namespace osc {
 		return true;
 	}
 
+	static bool extractJsonInt(const std::string& line, const std::string& key, int& out)
+	{
+		const std::string token = "\"" + key + "\"";
+		size_t pos = line.find(token);
+		if (pos == std::string::npos) return false;
+		pos = line.find(':', pos + token.size());
+		if (pos == std::string::npos) return false;
+		++pos;
+		while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+		if (pos >= line.size()) return false;
+
+		char* endPtr = nullptr;
+		const char* beginPtr = line.c_str() + pos;
+		const long value = std::strtol(beginPtr, &endPtr, 10);
+		if (endPtr == beginPtr) return false;
+		out = static_cast<int>(value);
+		return true;
+	}
+
+	static bool extractJsonBool(const std::string& line, const std::string& key, bool& out)
+	{
+		const std::string token = "\"" + key + "\"";
+		size_t pos = line.find(token);
+		if (pos == std::string::npos) return false;
+		pos = line.find(':', pos + token.size());
+		if (pos == std::string::npos) return false;
+		++pos;
+		while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+		if (pos >= line.size()) return false;
+
+		if (line.compare(pos, 4, "true") == 0) {
+			out = true;
+			return true;
+		}
+		if (line.compare(pos, 5, "false") == 0) {
+			out = false;
+			return true;
+		}
+		if (line[pos] == '1') {
+			out = true;
+			return true;
+		}
+		if (line[pos] == '0') {
+			out = false;
+			return true;
+		}
+		return false;
+	}
+
+	static bool parseBoolArg(const std::string& raw, bool& out)
+	{
+		std::string value = raw;
+		for (size_t i = 0; i < value.size(); ++i) {
+			value[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(value[i])));
+		}
+		if (value == "1" || value == "true" || value == "yes" || value == "on") {
+			out = true;
+			return true;
+		}
+		if (value == "0" || value == "false" || value == "no" || value == "off") {
+			out = false;
+			return true;
+		}
+		return false;
+	}
+
 	static std::string jsonEscape(const std::string& in)
 	{
 		std::string out;
@@ -149,8 +234,27 @@ namespace osc {
 			err = "missing or invalid field: output_file";
 			return false;
 		}
-		req.scaleFactor = 0.01f;
+		req.scaleFactor = defaultScaleFactor();
 		(void)extractJsonFloat(line, "factor", req.scaleFactor);
+		req.toolRadius = defaultToolRadius();
+		(void)extractJsonFloat(line, "tool_radius", req.toolRadius);
+		(void)extractJsonInt(line, "direction_count", req.directionSampling.goldenPointCount);
+		(void)extractJsonFloat(line, "direction_min_z", req.directionSampling.hemisphereMinZ);
+		(void)extractJsonInt(line, "carriage_sample_count", req.carriageSampling.sampleCount);
+		(void)extractJsonFloat(line, "carriage_inner_radius", req.carriageSampling.innerRadius);
+		(void)extractJsonFloat(line, "carriage_outer_radius", req.carriageSampling.outerRadius);
+		(void)extractJsonFloat(line, "carriage_z", req.carriageSampling.z);
+		std::string samplingMode;
+		if (extractJsonString(line, "sampling_mode", samplingMode)) {
+			if (!parseDirectionSamplingMode(samplingMode, req.directionSampling.mode)) {
+				err = "invalid field value: sampling_mode";
+				return false;
+			}
+		}
+		bool pruneBottomZMin = false;
+		if (extractJsonBool(line, "prune_bottom_zmin", pruneBottomZMin)) {
+			req.pruneBottomZMinMode = pruneBottomZMin ? 1 : 0;
+		}
 		req.requestId.clear();
 		(void)extractJsonString(line, "request_id", req.requestId);
 		return true;
@@ -163,10 +267,11 @@ namespace osc {
 			const std::vector<vec3f>& toolSamplePoints,
 			const std::vector<vec3f>& carriage,
 			const std::vector<vec3f>& rotatedToolByDir,
-			const std::vector<vec3f>& rotatedCarriageByDir)
+			const std::vector<vec3f>& rotatedCarriageByDir,
+			float toolHeadHitTolerance)
 			: sample(model)
 		{
-			setToolConfig(directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir);
+			setToolConfig(directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir, toolHeadHitTolerance);
 			setCheckPoints(checkPoints);
 		}
 
@@ -179,13 +284,15 @@ namespace osc {
 			const std::vector<vec3f>& newTool,
 			const std::vector<vec3f>& newCarriage,
 			const std::vector<vec3f>& newRotatedToolByDir,
-			const std::vector<vec3f>& newRotatedCarriageByDir)
+			const std::vector<vec3f>& newRotatedCarriageByDir,
+			float newToolHeadHitTolerance)
 		{
 			directions = newDirections;
 			toolSamplePoints = newTool;
 			carriage = newCarriage;
 			rotatedToolByDir = newRotatedToolByDir;
 			rotatedCarriageByDir = newRotatedCarriageByDir;
+			toolHeadHitTolerance = newToolHeadHitTolerance;
 			resize(vec3i((int)checkPoints.size(), (int)directions.size(), 1));
 		}
 
@@ -197,7 +304,7 @@ namespace osc {
 
 		void render()
 		{
-			sample.uploadArray(checkPoints, directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir);
+			sample.uploadArray(checkPoints, directions, toolSamplePoints, carriage, rotatedToolByDir, rotatedCarriageByDir, toolHeadHitTolerance);
 			sample.render();
 		}
 
@@ -217,6 +324,7 @@ namespace osc {
 		std::vector<vec3f>    carriage;
 		std::vector<vec3f>    rotatedToolByDir;
 		std::vector<vec3f>    rotatedCarriageByDir;
+		float                 toolHeadHitTolerance = 0.0f;
 	};
 
 	class CollisionEngine {
@@ -225,6 +333,14 @@ namespace osc {
 		{
 			auto start = std::chrono::steady_clock::now();
 			if (!loadStaticAssets(err)) return false;
+			if (req.scaleFactor <= 0.0f) {
+				err = "scale factor must be positive";
+				return false;
+			}
+			if (req.toolRadius <= 0.0f) {
+				err = "tool radius must be positive";
+				return false;
+			}
 			if (!fileExists(req.modelFile)) {
 				err = "model file not found: " + req.modelFile;
 				return false;
@@ -246,11 +362,37 @@ namespace osc {
 			loadPointsOFF(req.urpFile, urps);
 			std::cout << "load urps size:  " << urps.size() << std::endl;
 
+			const std::vector<vec3f> directions = generateDirectionSamples(req.directionSampling);
+			if (directions.empty()) {
+				err = "failed to generate directions";
+				return false;
+			}
+			const std::vector<vec3f> baseCarriagePoints = generateCarriageSamples(req.carriageSampling);
+			if (baseCarriagePoints.empty()) {
+				err = "failed to generate carriage samples";
+				return false;
+			}
+			std::cout << "sampling mode: " << directionSamplingModeName(req.directionSampling.mode)
+				<< ", directions: " << directions.size()
+				<< ", carriage samples: " << baseCarriagePoints.size() << std::endl;
+
 			std::vector<vec3f> tool;
 			std::vector<vec3f> carriage;
 			std::vector<vec3f> rotatedToolByDir;
 			std::vector<vec3f> rotatedCarriageByDir;
-			prepareScaledTooling(req.scaleFactor, tool, carriage, rotatedToolByDir, rotatedCarriageByDir);
+			float toolHeadHitTolerance = 0.0f;
+			prepareScaledTooling(directions,
+				baseCarriagePoints,
+				req.toolRadius,
+				req.scaleFactor,
+				tool,
+				carriage,
+				rotatedToolByDir,
+				rotatedCarriageByDir,
+				toolHeadHitTolerance);
+			std::cout << "tool radius: " << req.toolRadius
+				<< ", scale factor: " << req.scaleFactor
+				<< ", tool-head hit tolerance: " << toolHeadHitTolerance << std::endl;
 
 			if (!sampleInterMachine) {
 				sampleInterMachine.reset(new SampleIntersection(model,
@@ -259,14 +401,20 @@ namespace osc {
 					tool,
 					carriage,
 					rotatedToolByDir,
-					rotatedCarriageByDir));
+					rotatedCarriageByDir,
+					toolHeadHitTolerance));
 				loadedModelFile = req.modelFile;
 			}
 			else if (loadedModelFile != req.modelFile) {
 				sampleInterMachine->setModel(model);
 				loadedModelFile = req.modelFile;
 			}
-			sampleInterMachine->setToolConfig(directions, tool, carriage, rotatedToolByDir, rotatedCarriageByDir);
+			sampleInterMachine->setToolConfig(directions,
+				tool,
+				carriage,
+				rotatedToolByDir,
+				rotatedCarriageByDir,
+				toolHeadHitTolerance);
 
 			const size_t batchSize = std::min<size_t>(urps.size(), 50000);
 			std::vector<bool> urpsReachable(urps.size(), false);
@@ -295,8 +443,23 @@ namespace osc {
 				}
 			}
 
-			writeOBJwithPoints(req.outFile, unreachablePoints);
-			std::cout << "已生成不可达点输出文件: " << req.outFile << " " << unreachablePoints.size() << std::endl;
+			const bool pruneBottomZMin = resolvePruneBottomZMin(req);
+			std::vector<vec3f> filteredUnreachablePoints;
+			std::vector<int> filteredUnreachableIndices;
+			filterBottomZPoints(unreachablePoints,
+				unreachableIndices,
+				computeModelZMin(model),
+				pruneBottomZMin,
+				filteredUnreachablePoints,
+				filteredUnreachableIndices);
+			if (pruneBottomZMin) {
+				std::cout << "bottom-z pruning enabled, kept "
+					<< filteredUnreachablePoints.size() << " / " << unreachablePoints.size()
+					<< " unreachable points" << std::endl;
+			}
+
+			writeOBJwithPoints(req.outFile, filteredUnreachablePoints);
+			std::cout << "已生成不可达点输出文件: " << req.outFile << " " << filteredUnreachablePoints.size() << std::endl;
 
 			const std::string indexOutFile = req.outFile + ".indices.txt";
 			std::ofstream idxFile(indexOutFile.c_str(), std::ios::out | std::ios::trunc);
@@ -304,14 +467,14 @@ namespace osc {
 				err = "failed to create index file: " + indexOutFile;
 				return false;
 			}
-			for (size_t i = 0; i < unreachableIndices.size(); ++i) {
-				idxFile << unreachableIndices[i] << "\n";
+			for (size_t i = 0; i < filteredUnreachableIndices.size(); ++i) {
+				idxFile << filteredUnreachableIndices[i] << "\n";
 			}
 			idxFile.close();
 			std::cout << "已生成不可达点索引文件: " << indexOutFile << std::endl;
 
 			auto end = std::chrono::steady_clock::now();
-			result.unreachableCount = (int)unreachablePoints.size();
+			result.unreachableCount = (int)filteredUnreachablePoints.size();
 			result.indicesFile = indexOutFile;
 			result.elapsedMs = std::chrono::duration_cast<std::chrono::duration<double, std::milli> >(end - start).count();
 			std::cout << "耗时: " << (int)(result.elapsedMs / 1000.0) << " 秒" << std::endl;
@@ -323,23 +486,9 @@ namespace osc {
 		{
 			if (staticAssetsLoaded) return true;
 
-			const std::string directionFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/PoS_66.off";
-			std::cout << "Loading direction file from: " << directionFile << std::endl;
-			loadPointsOFF(directionFile, directions);
-			if (directions.empty()) {
-				err = "failed to load direction file: " + directionFile;
-				return false;
-			}
-			for (size_t i = 0; i < directions.size(); ++i) {
-				directions[i] = normalize(directions[i]);
-			}
-			std::cout << "load directions size:  " << directions.size() << std::endl;
-
 			const std::string toolFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/ToolHeadSample_r1.off";
-			const std::string carriageFile = std::string(PROJECT_ROOT_DIR) + "/mesh/tools/carriage_r1.5_r25_158.off";
 			loadPointsOFF(toolFile, baseToolPoints);
-			loadPointsOFF(carriageFile, baseCarriagePoints);
-			if (baseToolPoints.empty() || baseCarriagePoints.empty()) {
+			if (baseToolPoints.empty()) {
 				err = "failed to load tool assets";
 				return false;
 			}
@@ -348,16 +497,21 @@ namespace osc {
 			return true;
 		}
 
-		void prepareScaledTooling(float scaleFactor,
+		void prepareScaledTooling(const std::vector<vec3f>& directions,
+			const std::vector<vec3f>& baseCarriagePoints,
+			float toolRadius,
+			float scaleFactor,
 			std::vector<vec3f>& tool,
 			std::vector<vec3f>& carriage,
 			std::vector<vec3f>& rotatedToolByDir,
-			std::vector<vec3f>& rotatedCarriageByDir)
+			std::vector<vec3f>& rotatedCarriageByDir,
+			float& toolHeadHitTolerance)
 		{
 			tool = baseToolPoints;
 			carriage = baseCarriagePoints;
-			const float toolScale = scaleFactor * cutter.ball_r;
+			const float toolScale = scaleFactor * toolRadius;
 			const float carriageScale = scaleFactor;
+			toolHeadHitTolerance = toolScale;
 
 			for (size_t i = 0; i < tool.size(); ++i) tool[i] *= toolScale;
 			for (size_t i = 0; i < carriage.size(); ++i) carriage[i] *= carriageScale;
@@ -374,11 +528,24 @@ namespace osc {
 			}
 		}
 
-		Cutter cutter;
+		bool resolvePruneBottomZMin(const CollisionRequest& req) const
+		{
+			if (req.pruneBottomZMinMode >= 0) return req.pruneBottomZMinMode != 0;
+			return defaultPruneBottomZMin(req.directionSampling.mode);
+		}
+
+		float computeModelZMin(const TriangleMesh& model) const
+		{
+			if (model.vertex.empty()) return 0.0f;
+			float zMin = model.vertex.front().z;
+			for (size_t i = 1; i < model.vertex.size(); ++i) {
+				zMin = std::min(zMin, model.vertex[i].z);
+			}
+			return zMin;
+		}
+
 		bool staticAssetsLoaded = false;
-		std::vector<vec3f> directions;
 		std::vector<vec3f> baseToolPoints;
-		std::vector<vec3f> baseCarriagePoints;
 		std::unique_ptr<SampleIntersection> sampleInterMachine;
 		std::string loadedModelFile;
 	};
@@ -428,19 +595,35 @@ namespace osc {
 		req.modelFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_n.off";
 		req.urpFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_urps_n.off";
 		req.outFile = std::string(PROJECT_ROOT_DIR) + "/mesh/exp1/ruyi_recur1_output_collision.obj";
-		req.scaleFactor = 0.01f;
+		req.scaleFactor = defaultScaleFactor();
 
 		if (ac > 1) req.modelFile = av[1];
 		if (ac > 2) req.urpFile = av[2];
 		if (ac > 3) req.outFile = av[3];
 		if (ac > 4) req.scaleFactor = std::stof(av[4]);
+		if (ac > 5) {
+			if (!parseDirectionSamplingMode(av[5], req.directionSampling.mode)) {
+				throw std::runtime_error("invalid sampling_mode, expected golden_hemisphere or legacy_66_sphere");
+			}
+		}
+		if (ac > 6) {
+			bool pruneBottomZMin = false;
+			if (!parseBoolArg(av[6], pruneBottomZMin)) {
+				throw std::runtime_error("invalid prune_bottom_zmin, expected true/false/1/0");
+			}
+			req.pruneBottomZMinMode = pruneBottomZMin ? 1 : 0;
+		}
 
-		if (ac < 5) {
-			std::cout << "未检测到全部命令行参数，使用默认文件路径" << std::endl;
+		if (ac < 7) {
+			std::cout << "未检测到全部命令行参数，使用默认/补全后的配置" << std::endl;
 			std::cout << "模型文件: " << req.modelFile << std::endl;
 			std::cout << "URP文件: " << req.urpFile << std::endl;
 			std::cout << "输出文件: " << req.outFile << std::endl;
 			std::cout << "缩放比例: " << req.scaleFactor << std::endl;
+			std::cout << "采样模式: " << directionSamplingModeName(req.directionSampling.mode) << std::endl;
+			std::cout << "底部z_min过滤: " << (req.pruneBottomZMinMode >= 0
+				? (req.pruneBottomZMinMode != 0 ? "true" : "false")
+				: (defaultPruneBottomZMin(req.directionSampling.mode) ? "auto(true)" : "auto(false)")) << std::endl;
 		}
 
 		CollisionEngine engine;

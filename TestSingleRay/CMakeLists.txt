@@ -29,8 +29,10 @@ add_executable(TestSingleRay
   optix7.h
   CUDABuffer.h
   LaunchParams.h
+  SamplingUtils.h
   utils.h
   SampleRenderer.h
+  SamplingUtils.cpp
   SampleRenderer.cpp
   main.cpp
   )
@@ -48,3 +50,18 @@ target_link_libraries(TestSingleRay
   glfWindow
   )
 target_compile_definitions(TestSingleRay PRIVATE PROJECT_ROOT_DIR="${PROJECT_SOURCE_DIR}")
+
+add_executable(SamplingGeometryTest
+  SamplingUtils.h
+  SamplingUtils.cpp
+  SamplingGeometryTest.cpp
+)
+
+set_target_properties(SamplingGeometryTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin
+  OUTPUT_NAME SamplingGeometryTest
+)
+
+target_link_libraries(SamplingGeometryTest
+  gdt
+)

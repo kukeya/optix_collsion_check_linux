@@ -92,7 +92,8 @@ namespace osc {
 			std::vector<vec3f>& toolSamplePoints,
 			const std::vector<vec3f>& carriage,
 			const std::vector<vec3f>& rotatedToolByDir,
-			const std::vector<vec3f>& rotatedCarriageByDir);
+			const std::vector<vec3f>& rotatedCarriageByDir,
+			float toolHeadHitTolerance);
 
 	protected:
 		// ------------------------------------------------------------------

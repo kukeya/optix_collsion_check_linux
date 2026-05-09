@@ -666,7 +666,8 @@ namespace osc {
 		std::vector<vec3f>& toolSamplePoints,
 		const std::vector<vec3f>& carriage,
 		const std::vector<vec3f>& rotatedToolByDir,
-		const std::vector<vec3f>& rotatedCarriageByDir)
+		const std::vector<vec3f>& rotatedCarriageByDir,
+		float toolHeadHitTolerance)
 	{
 		auto uploadVec3fBuffer = [](CUDABuffer& buffer, const std::vector<vec3f>& data) {
 			const size_t requiredSize = data.size() * sizeof(vec3f);
@@ -693,7 +694,7 @@ namespace osc {
 		launchParams.numDirections = (int)directions.size();
 		launchParams.numToolSamplePoints = (int)toolSamplePoints.size();
 		launchParams.numCarriagePoints = (int)carriage.size();
-		//launchParams.lp
+		launchParams.toolHeadHitTolerance = toolHeadHitTolerance;
 
 		launchParamsBuffer.upload(&launchParams, 1);
 	}

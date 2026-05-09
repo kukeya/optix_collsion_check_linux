@@ -243,7 +243,7 @@ namespace osc {
 					u0, u1);
 
 				const float hitDist = hitDistance;
-					if (hitDist != -1.0f && hitDist > 0.015f)
+					if (hitDist != -1.0f && hitDist > optixLaunchParams.toolHeadHitTolerance)
 					{
 						isToolHeadHit = true;
 						break;

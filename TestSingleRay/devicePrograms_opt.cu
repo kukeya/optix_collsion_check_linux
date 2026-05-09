@@ -267,7 +267,7 @@ namespace osc {
 				u0, u1);
 
 			// original code used threshold hitDist > 1.5; keep same heuristic
-			if (hitDistance != -1.0f && hitDistance > 0.015f) {
+			if (hitDistance != -1.0f && hitDistance > optixLaunchParams.toolHeadHitTolerance) {
 				isReachable = false;
 				break;
 			}

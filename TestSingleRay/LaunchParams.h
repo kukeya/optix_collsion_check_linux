@@ -26,7 +26,7 @@ namespace osc {
 	{
 		struct {
 			uint32_t* colorBuffer;
-			vec2i     size;
+			vec2i size;
 		} frame;
 
 		struct {
@@ -44,7 +44,7 @@ namespace osc {
 		struct
 		{
 			int* reachable;
-			// x£ºurps.size()£¬y£ºdirections.size()£¬z£ºtoolSamplePoints.size()
+			// x = urps.size(), y = directions.size(), z kept for compatibility.
 			vec3i size;
 		} urpReachable;
 
@@ -62,9 +62,9 @@ namespace osc {
 		int numCarriagePoints;
 		vec3f* rotatedToolByDir;
 		vec3f* rotatedCarriageByDir;
+		float toolHeadHitTolerance;
 		int pointOffset;
-		//int pointCount;
-
+		// int pointCount;
 	};
 
 } // ::osc
