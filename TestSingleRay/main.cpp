@@ -41,32 +41,38 @@ namespace osc {
 		return 1.5f;
 	}
 
-	struct CollisionRequest {
-		std::string modelFile;
-		std::string urpFile;
-		std::string outFile;
-		float scaleFactor;
-		float toolRadius;
-		DirectionSamplingConfig directionSampling;
-		CarriageSamplingConfig carriageSampling;
-		int pruneBottomZMinMode;
-		std::string requestId;
+		struct CollisionRequest {
+			std::string modelFile;
+			std::string urpFile;
+			std::string outFile;
+			std::string debugToolOutFile;
+			float scaleFactor;
+			float toolRadius;
+			float toolHeadHitToleranceOverride;
+			DirectionSamplingConfig directionSampling;
+			CarriageSamplingConfig carriageSampling;
+			int pruneBottomZMinMode;
+			int debugExportPointIndex;
+			std::string requestId;
 
-		CollisionRequest()
-			: scaleFactor(defaultScaleFactor())
-			, toolRadius(defaultToolRadius())
-			, directionSampling()
-			, carriageSampling()
-			, pruneBottomZMinMode(-1)
-		{
-		}
-	};
+				CollisionRequest()
+					: scaleFactor(defaultScaleFactor())
+					, toolRadius(defaultToolRadius())
+					, toolHeadHitToleranceOverride(-1.0f)
+					, directionSampling()
+				, carriageSampling()
+				, pruneBottomZMinMode(-1)
+				, debugExportPointIndex(-1)
+			{
+			}
+		};
 
-	struct CollisionResult {
-		int unreachableCount = 0;
-		double elapsedMs = 0.0;
-		std::string indicesFile;
-	};
+		struct CollisionResult {
+			int unreachableCount = 0;
+			double elapsedMs = 0.0;
+			std::string indicesFile;
+			std::string debugToolFile;
+		};
 
 	static inline bool fileExists(const std::string& path)
 	{
@@ -234,17 +240,20 @@ namespace osc {
 			err = "missing or invalid field: output_file";
 			return false;
 		}
-		req.scaleFactor = defaultScaleFactor();
-		(void)extractJsonFloat(line, "factor", req.scaleFactor);
-		req.toolRadius = defaultToolRadius();
-		(void)extractJsonFloat(line, "tool_radius", req.toolRadius);
-		(void)extractJsonInt(line, "direction_count", req.directionSampling.goldenPointCount);
+			req.scaleFactor = defaultScaleFactor();
+			(void)extractJsonFloat(line, "factor", req.scaleFactor);
+			req.toolRadius = defaultToolRadius();
+			(void)extractJsonFloat(line, "tool_radius", req.toolRadius);
+			(void)extractJsonFloat(line, "tool_head_hit_tolerance", req.toolHeadHitToleranceOverride);
+			(void)extractJsonInt(line, "direction_count", req.directionSampling.goldenPointCount);
 		(void)extractJsonFloat(line, "direction_min_z", req.directionSampling.hemisphereMinZ);
 		(void)extractJsonInt(line, "carriage_sample_count", req.carriageSampling.sampleCount);
 		(void)extractJsonFloat(line, "carriage_inner_radius", req.carriageSampling.innerRadius);
-		(void)extractJsonFloat(line, "carriage_outer_radius", req.carriageSampling.outerRadius);
-		(void)extractJsonFloat(line, "carriage_z", req.carriageSampling.z);
-		std::string samplingMode;
+			(void)extractJsonFloat(line, "carriage_outer_radius", req.carriageSampling.outerRadius);
+			(void)extractJsonFloat(line, "carriage_z", req.carriageSampling.z);
+			(void)extractJsonInt(line, "debug_export_point_index", req.debugExportPointIndex);
+			(void)extractJsonString(line, "debug_tool_output_file", req.debugToolOutFile);
+			std::string samplingMode;
 		if (extractJsonString(line, "sampling_mode", samplingMode)) {
 			if (!parseDirectionSamplingMode(samplingMode, req.directionSampling.mode)) {
 				err = "invalid field value: sampling_mode";
@@ -308,17 +317,21 @@ namespace osc {
 			sample.render();
 		}
 
-		void resize(const vec3i& newSize)
-		{
-			fbSize = newSize;
-			sample.resize(newSize);
-			reachable.resize(newSize.x);
-		}
+			void resize(const vec3i& newSize)
+			{
+				fbSize = newSize;
+				sample.resize(newSize);
+				reachable.resize(newSize.x);
+				selectedDirectionIdx.resize(newSize.x);
+				selectedToolSampleIdx.resize(newSize.x);
+			}
 
 		vec3i                 fbSize;
 		SampleRenderer        sample;
-		std::vector<int>      reachable;
-		std::vector<vec3f>    checkPoints;
+			std::vector<int>      reachable;
+			std::vector<int>      selectedDirectionIdx;
+			std::vector<int>      selectedToolSampleIdx;
+			std::vector<vec3f>    checkPoints;
 		std::vector<vec3f>    directions;
 		std::vector<vec3f>    toolSamplePoints;
 		std::vector<vec3f>    carriage;
@@ -381,12 +394,13 @@ namespace osc {
 			std::vector<vec3f> rotatedToolByDir;
 			std::vector<vec3f> rotatedCarriageByDir;
 			float toolHeadHitTolerance = 0.0f;
-			prepareScaledTooling(directions,
-				baseCarriagePoints,
-				req.toolRadius,
-				req.scaleFactor,
-				tool,
-				carriage,
+				prepareScaledTooling(directions,
+					baseCarriagePoints,
+					req.toolRadius,
+					req.scaleFactor,
+					req.toolHeadHitToleranceOverride,
+					tool,
+					carriage,
 				rotatedToolByDir,
 				rotatedCarriageByDir,
 				toolHeadHitTolerance);
@@ -416,21 +430,63 @@ namespace osc {
 				rotatedCarriageByDir,
 				toolHeadHitTolerance);
 
-			const size_t batchSize = std::min<size_t>(urps.size(), 50000);
-			std::vector<bool> urpsReachable(urps.size(), false);
-			for (size_t batchStart = 0; batchStart < urps.size(); batchStart += batchSize) {
-				size_t batchEnd = std::min(batchStart + batchSize, urps.size());
-				std::vector<vec3f> urpsBatch(urps.begin() + batchStart, urps.begin() + batchEnd);
+				const size_t batchSize = std::min<size_t>(urps.size(), 50000);
+				std::vector<bool> urpsReachable(urps.size(), false);
+				std::vector<int> selectedDirectionGlobal(urps.size(), -1);
+				std::vector<int> selectedToolGlobal(urps.size(), -1);
+				for (size_t batchStart = 0; batchStart < urps.size(); batchStart += batchSize) {
+					size_t batchEnd = std::min(batchStart + batchSize, urps.size());
+					std::vector<vec3f> urpsBatch(urps.begin() + batchStart, urps.begin() + batchEnd);
 
 				std::cout << "处理批次: " << batchStart << " - " << batchEnd << std::endl;
-				sampleInterMachine->setCheckPoints(urpsBatch);
-				sampleInterMachine->render();
-				sampleInterMachine->sample.downloadReachable(sampleInterMachine->reachable.data());
+					sampleInterMachine->setCheckPoints(urpsBatch);
+					sampleInterMachine->render();
+					sampleInterMachine->sample.downloadReachable(sampleInterMachine->reachable.data());
+					sampleInterMachine->sample.downloadSelectedPose(sampleInterMachine->selectedDirectionIdx.data(),
+						sampleInterMachine->selectedToolSampleIdx.data());
 
-				for (size_t i = 0; i < urpsBatch.size(); ++i) {
-					urpsReachable[batchStart + i] = (sampleInterMachine->reachable[i] != 0);
+					for (size_t i = 0; i < urpsBatch.size(); ++i) {
+						urpsReachable[batchStart + i] = (sampleInterMachine->reachable[i] != 0);
+						selectedDirectionGlobal[batchStart + i] = sampleInterMachine->selectedDirectionIdx[i];
+						selectedToolGlobal[batchStart + i] = sampleInterMachine->selectedToolSampleIdx[i];
+					}
 				}
-			}
+
+				if (req.debugExportPointIndex >= 0) {
+					const size_t debugPointIndex = static_cast<size_t>(req.debugExportPointIndex);
+					if (debugPointIndex >= urps.size()) {
+						err = "debug_export_point_index out of range";
+						return false;
+					}
+					if (!urpsReachable[debugPointIndex]) {
+						std::cout << "debug export skipped: point " << req.debugExportPointIndex
+							<< " is unreachable under current settings" << std::endl;
+					}
+					else {
+						const int dirIdx = selectedDirectionGlobal[debugPointIndex];
+						const int toolIdx = selectedToolGlobal[debugPointIndex];
+						if (dirIdx < 0 || toolIdx < 0
+							|| dirIdx >= (int)directions.size()
+							|| toolIdx >= (int)tool.size()) {
+							err = "debug export failed: reachable point missing pose indices";
+							return false;
+						}
+						const std::string debugToolOutFile = req.debugToolOutFile.empty()
+							? (req.outFile + ".tool_debug.obj")
+							: req.debugToolOutFile;
+						outputToolModel(urps[debugPointIndex],
+							directions[dirIdx],
+							tool[toolIdx],
+							tool,
+							carriage,
+							debugToolOutFile);
+						result.debugToolFile = debugToolOutFile;
+						std::cout << "已导出可达刀具姿态: point=" << req.debugExportPointIndex
+							<< ", direction_idx=" << dirIdx
+							<< ", tool_sample_idx=" << toolIdx
+							<< ", file=" << debugToolOutFile << std::endl;
+					}
+				}
 
 			std::vector<vec3f> unreachablePoints;
 			std::vector<int> unreachableIndices;
@@ -497,21 +553,24 @@ namespace osc {
 			return true;
 		}
 
-		void prepareScaledTooling(const std::vector<vec3f>& directions,
-			const std::vector<vec3f>& baseCarriagePoints,
-			float toolRadius,
-			float scaleFactor,
-			std::vector<vec3f>& tool,
-			std::vector<vec3f>& carriage,
+			void prepareScaledTooling(const std::vector<vec3f>& directions,
+				const std::vector<vec3f>& baseCarriagePoints,
+				float toolRadius,
+				float scaleFactor,
+				float toolHeadHitToleranceOverride,
+				std::vector<vec3f>& tool,
+				std::vector<vec3f>& carriage,
 			std::vector<vec3f>& rotatedToolByDir,
 			std::vector<vec3f>& rotatedCarriageByDir,
 			float& toolHeadHitTolerance)
 		{
-			tool = baseToolPoints;
-			carriage = baseCarriagePoints;
-			const float toolScale = scaleFactor * toolRadius;
-			const float carriageScale = scaleFactor;
-			toolHeadHitTolerance = toolScale;
+				tool = baseToolPoints;
+				carriage = baseCarriagePoints;
+				const float toolScale = scaleFactor * toolRadius;
+				const float carriageScale = scaleFactor;
+				toolHeadHitTolerance = toolHeadHitToleranceOverride >= 0.0f
+					? toolHeadHitToleranceOverride
+					: toolScale;
 
 			for (size_t i = 0; i < tool.size(); ++i) tool[i] *= toolScale;
 			for (size_t i = 0; i < carriage.size(); ++i) carriage[i] *= carriageScale;
@@ -575,12 +634,16 @@ namespace osc {
 			CollisionResult result;
 			std::string err;
 			const bool ok = engine.runRequest(req, result, err);
-			if (ok) {
-				protocolOut << "{\"ok\":true,\"request_id\":\"" << jsonEscape(req.requestId)
-					<< "\",\"indices_file\":\"" << jsonEscape(result.indicesFile)
-					<< "\",\"unreachable_count\":" << result.unreachableCount
-					<< ",\"elapsed_ms\":" << result.elapsedMs << "}" << std::endl;
-			}
+				if (ok) {
+					protocolOut << "{\"ok\":true,\"request_id\":\"" << jsonEscape(req.requestId)
+						<< "\",\"indices_file\":\"" << jsonEscape(result.indicesFile)
+						<< "\",\"unreachable_count\":" << result.unreachableCount
+						<< ",\"elapsed_ms\":" << result.elapsedMs;
+					if (!result.debugToolFile.empty()) {
+						protocolOut << ",\"debug_tool_file\":\"" << jsonEscape(result.debugToolFile) << "\"";
+					}
+					protocolOut << "}" << std::endl;
+				}
 			else {
 				protocolOut << "{\"ok\":false,\"request_id\":\"" << jsonEscape(req.requestId)
 					<< "\",\"error\":\"" << jsonEscape(err) << "\"}" << std::endl;
@@ -603,28 +666,37 @@ namespace osc {
 		if (ac > 4) req.scaleFactor = std::stof(av[4]);
 		if (ac > 5) {
 			if (!parseDirectionSamplingMode(av[5], req.directionSampling.mode)) {
-				throw std::runtime_error("invalid sampling_mode, expected golden_hemisphere or legacy_66_sphere");
+				throw std::runtime_error("invalid sampling_mode, expected axis_5, axis_9, golden_hemisphere or legacy_66_sphere");
 			}
 		}
-		if (ac > 6) {
-			bool pruneBottomZMin = false;
-			if (!parseBoolArg(av[6], pruneBottomZMin)) {
-				throw std::runtime_error("invalid prune_bottom_zmin, expected true/false/1/0");
-			}
-			req.pruneBottomZMinMode = pruneBottomZMin ? 1 : 0;
-		}
+				if (ac > 6) {
+					bool pruneBottomZMin = false;
+					if (!parseBoolArg(av[6], pruneBottomZMin)) {
+						throw std::runtime_error("invalid prune_bottom_zmin, expected true/false/1/0");
+					}
+					req.pruneBottomZMinMode = pruneBottomZMin ? 1 : 0;
+				}
+				if (ac > 7) req.debugExportPointIndex = std::stoi(av[7]);
+				if (ac > 8) req.debugToolOutFile = av[8];
+				if (ac > 9) req.toolHeadHitToleranceOverride = std::stof(av[9]);
 
-		if (ac < 7) {
-			std::cout << "未检测到全部命令行参数，使用默认/补全后的配置" << std::endl;
+			if (ac < 7) {
+				std::cout << "未检测到全部命令行参数，使用默认/补全后的配置" << std::endl;
 			std::cout << "模型文件: " << req.modelFile << std::endl;
 			std::cout << "URP文件: " << req.urpFile << std::endl;
 			std::cout << "输出文件: " << req.outFile << std::endl;
 			std::cout << "缩放比例: " << req.scaleFactor << std::endl;
-			std::cout << "采样模式: " << directionSamplingModeName(req.directionSampling.mode) << std::endl;
-			std::cout << "底部z_min过滤: " << (req.pruneBottomZMinMode >= 0
-				? (req.pruneBottomZMinMode != 0 ? "true" : "false")
-				: (defaultPruneBottomZMin(req.directionSampling.mode) ? "auto(true)" : "auto(false)")) << std::endl;
-		}
+					std::cout << "采样模式: " << directionSamplingModeName(req.directionSampling.mode) << std::endl;
+					std::cout << "底部z_min过滤: " << (req.pruneBottomZMinMode >= 0
+						? (req.pruneBottomZMinMode != 0 ? "true" : "false")
+						: (defaultPruneBottomZMin(req.directionSampling.mode) ? "auto(true)" : "auto(false)")) << std::endl;
+					if (req.toolHeadHitToleranceOverride >= 0.0f) {
+						std::cout << "覆盖 tool-head hit tolerance: " << req.toolHeadHitToleranceOverride << std::endl;
+					}
+					if (req.debugExportPointIndex >= 0) {
+						std::cout << "调试导出点索引: " << req.debugExportPointIndex << std::endl;
+					}
+			}
 
 		CollisionEngine engine;
 		CollisionResult result;

@@ -723,26 +723,44 @@ namespace osc {
 	}
 
 	/*! resize frame buffer to given resolution */
-	void SampleRenderer::resize(const vec3i& newSize)
-	{
+		void SampleRenderer::resize(const vec3i& newSize)
+		{
 		// if window minimized
 		//if (newSize.x == 0 || newSize.y == 0) return;
 
 		// resize our cuda frame buffer
-		const size_t pointReachableBytes = (size_t)newSize.x * sizeof(int);
-		if (reachableBuffer.sizeInBytes != pointReachableBytes) {
-			reachableBuffer.resize(pointReachableBytes);
-		}
-		{
-			cudaError_t rc = cudaMemset(reachableBuffer.d_ptr, 0, pointReachableBytes); if (rc != cudaSuccess) {
-				std::stringstream txt; cudaError_t err = rc; txt << "CUDA Error " << cudaGetErrorName(err) << " (" << cudaGetErrorString(err) << ")"; throw std::runtime_error(txt.str());
+			const size_t pointReachableBytes = (size_t)newSize.x * sizeof(int);
+			if (reachableBuffer.sizeInBytes != pointReachableBytes) {
+				reachableBuffer.resize(pointReachableBytes);
 			}
-		};
+			if (selectedDirectionIdxBuffer.sizeInBytes != pointReachableBytes) {
+				selectedDirectionIdxBuffer.resize(pointReachableBytes);
+			}
+			if (selectedToolSampleIdxBuffer.sizeInBytes != pointReachableBytes) {
+				selectedToolSampleIdxBuffer.resize(pointReachableBytes);
+			}
+			{
+				cudaError_t rc = cudaMemset(reachableBuffer.d_ptr, 0, pointReachableBytes); if (rc != cudaSuccess) {
+					std::stringstream txt; cudaError_t err = rc; txt << "CUDA Error " << cudaGetErrorName(err) << " (" << cudaGetErrorString(err) << ")"; throw std::runtime_error(txt.str());
+				}
+			}
+			{
+				cudaError_t rc = cudaMemset(selectedDirectionIdxBuffer.d_ptr, 0xFF, pointReachableBytes); if (rc != cudaSuccess) {
+					std::stringstream txt; cudaError_t err = rc; txt << "CUDA Error " << cudaGetErrorName(err) << " (" << cudaGetErrorString(err) << ")"; throw std::runtime_error(txt.str());
+				}
+			}
+			{
+				cudaError_t rc = cudaMemset(selectedToolSampleIdxBuffer.d_ptr, 0xFF, pointReachableBytes); if (rc != cudaSuccess) {
+					std::stringstream txt; cudaError_t err = rc; txt << "CUDA Error " << cudaGetErrorName(err) << " (" << cudaGetErrorString(err) << ")"; throw std::runtime_error(txt.str());
+				}
+			}
 
-		launchParams.urpReachable.size = newSize;
-		launchParams.urpReachable.reachable = (int*)reachableBuffer.d_pointer();
+			launchParams.urpReachable.size = newSize;
+			launchParams.urpReachable.reachable = (int*)reachableBuffer.d_pointer();
+			launchParams.selectedDirectionIdx = (int*)selectedDirectionIdxBuffer.d_pointer();
+			launchParams.selectedToolSampleIdx = (int*)selectedToolSampleIdxBuffer.d_pointer();
 
-	}
+		}
 
 	/*! download the rendered color buffer */
 	void SampleRenderer::downloadPixels(uint32_t h_pixels[])
@@ -757,10 +775,16 @@ namespace osc {
 			launchParams.hitTool.size.x * launchParams.hitTool.size.y);
 	}
 
-	void SampleRenderer::downloadReachable(int h_reachable[])
-	{
-		reachableBuffer.download(h_reachable,
-			launchParams.urpReachable.size.x);
-	}
+		void SampleRenderer::downloadReachable(int h_reachable[])
+		{
+			reachableBuffer.download(h_reachable,
+				launchParams.urpReachable.size.x);
+		}
 
-} // ::osc
+		void SampleRenderer::downloadSelectedPose(int h_directionIdx[], int h_toolSampleIdx[])
+		{
+			selectedDirectionIdxBuffer.download(h_directionIdx, launchParams.urpReachable.size.x);
+			selectedToolSampleIdxBuffer.download(h_toolSampleIdx, launchParams.urpReachable.size.x);
+		}
+
+	} // ::osc

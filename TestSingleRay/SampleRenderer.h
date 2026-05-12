@@ -78,9 +78,10 @@ namespace osc {
 		/*! download the rendered color buffer */
 		void downloadPixels(uint32_t h_pixels[]);
 
-		void downloadHitID(uint32_t h_hitID[]);
+			void downloadHitID(uint32_t h_hitID[]);
 
-		void downloadReachable(int h_reachable[]);
+			void downloadReachable(int h_reachable[]);
+			void downloadSelectedPose(int h_directionIdx[], int h_toolSampleIdx[]);
 
 		/*! set camera to render with */
 		void setCamera(const Camera& camera);
@@ -170,9 +171,11 @@ namespace osc {
 
 		CUDABuffer colorBuffer;
 
-		CUDABuffer hitIDBuffer;
-		CUDABuffer reachableBuffer;
-		CUDABuffer urpsBuffer;
+			CUDABuffer hitIDBuffer;
+			CUDABuffer reachableBuffer;
+			CUDABuffer selectedDirectionIdxBuffer;
+			CUDABuffer selectedToolSampleIdxBuffer;
+			CUDABuffer urpsBuffer;
 		CUDABuffer directionBuffer;
 		CUDABuffer toolSampleBuffer;
 		CUDABuffer carriageBuffer;

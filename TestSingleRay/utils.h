@@ -139,12 +139,12 @@ void writeOBJwithPoints(const std::string outFilename, std::vector<vec3f>& point
 }
 
 
-void outputToolModel(const vec3f& p,
-	const vec3f& currentDir,
-	const vec3f& toolSample,
-	const std::vector<vec3f>& toolSamplePoints,
-	const std::vector<vec3f>& carriage,
-	const std::string outFilename) {
+	void outputToolModel(const vec3f& p,
+		const vec3f& currentDir,
+		const vec3f& toolSample,
+		const std::vector<vec3f>& toolSamplePoints,
+		const std::vector<vec3f>& carriage,
+		const std::string outFilename) {
 
 	vec3f rotatedToolSample;
 	rotateToolPoint(toolSample, currentDir, rotatedToolSample);
@@ -157,12 +157,46 @@ void outputToolModel(const vec3f& p,
 		rotateToolPoint(pt, currentDir, rotatedPt);
 		finalPoints.push_back(toolOrigin + rotatedPt);
 	}
-	for (auto& pt : carriage)
-	{
-		vec3f rotatedPt;
-		rotateToolPoint(pt, currentDir, rotatedPt);
-		finalPoints.push_back(toolOrigin + rotatedPt);
-	}
+		for (auto& pt : carriage)
+		{
+			vec3f rotatedPt;
+			rotateToolPoint(pt, currentDir, rotatedPt);
+			finalPoints.push_back(toolOrigin + rotatedPt);
+		}
 
-	writeOBJwithPointsAndDirections(outFilename, finalPoints, currentDir);
-}
+		float axisLength = 1.0f;
+		for (const auto& pt : finalPoints) {
+			axisLength = std::max(axisLength, length(pt - toolOrigin));
+		}
+		axisLength *= 1.5f;
+
+		std::ofstream outFile(outFilename, std::ios::out | std::ios::trunc);
+		if (!outFile.is_open()) {
+			std::cerr << "无法打开文件: " << outFilename << std::endl;
+			return;
+		}
+
+		outFile << "# Tool pose debug OBJ\n";
+		for (const auto& pt : finalPoints) {
+			outFile << "v " << pt.x << " " << pt.y << " " << pt.z << "\n";
+		}
+
+		const int toolOriginIdx = static_cast<int>(finalPoints.size()) + 1;
+		const int contactPointIdx = toolOriginIdx + 1;
+		const int spindleDirIdx = toolOriginIdx + 2;
+		const int machiningDirIdx = toolOriginIdx + 3;
+		const vec3f spindleEnd = toolOrigin + currentDir * axisLength;
+		const vec3f machiningEnd = toolOrigin - currentDir * axisLength;
+
+		outFile << "v " << toolOrigin.x << " " << toolOrigin.y << " " << toolOrigin.z << "\n";
+		outFile << "v " << p.x << " " << p.y << " " << p.z << "\n";
+		outFile << "v " << spindleEnd.x << " " << spindleEnd.y << " " << spindleEnd.z << "\n";
+		outFile << "v " << machiningEnd.x << " " << machiningEnd.y << " " << machiningEnd.z << "\n";
+
+		outFile << "l " << toolOriginIdx << " " << contactPointIdx << "\n";
+		outFile << "l " << toolOriginIdx << " " << spindleDirIdx << "\n";
+		outFile << "l " << toolOriginIdx << " " << machiningDirIdx << "\n";
+		outFile.close();
+
+		std::cout << "已输出OBJ文件: " << outFilename << std::endl;
+	}

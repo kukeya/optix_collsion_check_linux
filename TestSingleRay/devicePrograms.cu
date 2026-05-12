@@ -152,6 +152,8 @@ namespace osc {
 		const int d_idx = idx.y;
 		const int p_idx = idx.x + optixLaunchParams.pointOffset;
 		int* pointReachable = &optixLaunchParams.urpReachable.reachable[p_idx];
+		int* selectedDirectionIdx = &optixLaunchParams.selectedDirectionIdx[p_idx];
+		int* selectedToolSampleIdx = &optixLaunchParams.selectedToolSampleIdx[p_idx];
 		if (*pointReachable != 0) return;
 
 		const vec3f p = optixLaunchParams.urps[p_idx];
@@ -249,12 +251,15 @@ namespace osc {
 						break;
 				}
 			}
-				if (isToolHeadHit) continue;
+					if (isToolHeadHit) continue;
 
-				// Found a valid tool sample for this (point, direction).
-				atomicOr(pointReachable, 1);
-				return;
-			}
-	}
+					// Found a valid tool sample for this (point, direction).
+					if (atomicCAS(pointReachable, 0, 1) == 0) {
+						*selectedDirectionIdx = d_idx;
+						*selectedToolSampleIdx = t_idx;
+					}
+					return;
+				}
+		}
 
 } // ::osc

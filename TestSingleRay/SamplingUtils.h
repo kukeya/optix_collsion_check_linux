@@ -11,6 +11,8 @@ namespace osc {
 	enum class DirectionSamplingMode {
 		Legacy66Sphere,
 		GoldenHemisphere,
+		AxisFive,
+		AxisNine,
 	};
 
 	struct DirectionSamplingConfig {

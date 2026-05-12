@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -12,6 +13,13 @@ namespace {
 	bool approx(float a, float b, float eps = 1e-5f)
 	{
 		return std::fabs(a - b) <= eps;
+	}
+
+	void require(bool condition, const char* message)
+	{
+		if (!condition) {
+			throw std::runtime_error(message);
+		}
 	}
 
 	void testLegacyDirections()
@@ -40,7 +48,7 @@ namespace {
 		cfg.hemisphereMinZ = -0.05f;
 
 		const auto dirs = generateDirectionSamples(cfg);
-		assert(dirs.size() == 105);
+		require(dirs.size() == 417, "golden_hemisphere default should contain 104 mirrored quartets plus north pole");
 
 		bool hasNorthPole = false;
 		for (const auto& dir : dirs) {
@@ -49,6 +57,96 @@ namespace {
 			hasNorthPole = hasNorthPole || (approx(dir.x, 0.0f) && approx(dir.y, 0.0f) && approx(dir.z, 1.0f));
 		}
 		assert(hasNorthPole);
+
+		for (const auto& dir : dirs) {
+			if (approx(dir.x, 0.0f) && approx(dir.y, 0.0f)) continue;
+			bool hasXMirror = false;
+			bool hasYMirror = false;
+			bool hasOppositeAzimuth = false;
+			for (const auto& candidate : dirs) {
+				if (approx(candidate.x, -dir.x, 1e-5f)
+					&& approx(candidate.y, dir.y, 1e-5f)
+					&& approx(candidate.z, dir.z, 1e-5f)) {
+					hasXMirror = true;
+				}
+				if (approx(candidate.x, dir.x, 1e-5f)
+					&& approx(candidate.y, -dir.y, 1e-5f)
+					&& approx(candidate.z, dir.z, 1e-5f)) {
+					hasYMirror = true;
+				}
+				if (approx(candidate.x, -dir.x, 1e-5f)
+					&& approx(candidate.y, -dir.y, 1e-5f)
+					&& approx(candidate.z, dir.z, 1e-5f)) {
+					hasOppositeAzimuth = true;
+				}
+			}
+			require(hasXMirror, "golden_hemisphere direction lacks x-mirror pair");
+			require(hasYMirror, "golden_hemisphere direction lacks y-mirror pair");
+			require(hasOppositeAzimuth, "golden_hemisphere direction lacks opposite azimuth pair");
+		}
+	}
+
+	void testAxisFiveDirections()
+	{
+		DirectionSamplingConfig cfg;
+		cfg.mode = DirectionSamplingMode::AxisFive;
+		const auto dirs = generateDirectionSamples(cfg);
+		require(dirs.size() == 5, "axis_5 should contain exactly five machining directions");
+
+		const vec3f expected[] = {
+			vec3f(0.f, 0.f, 1.f),
+			vec3f(1.f, 0.f, 0.f),
+			vec3f(-1.f, 0.f, 0.f),
+			vec3f(0.f, 1.f, 0.f),
+			vec3f(0.f, -1.f, 0.f),
+		};
+
+		for (const auto& target : expected) {
+			bool found = false;
+			for (const auto& dir : dirs) {
+				if (approx(dir.x, target.x, 1e-6f)
+					&& approx(dir.y, target.y, 1e-6f)
+					&& approx(dir.z, target.z, 1e-6f)) {
+					found = true;
+					break;
+				}
+			}
+			require(found, "axis_5 is missing one of the requested cardinal directions");
+		}
+	}
+
+	void testAxisNineDirections()
+	{
+		DirectionSamplingConfig cfg;
+		cfg.mode = DirectionSamplingMode::AxisNine;
+		const auto dirs = generateDirectionSamples(cfg);
+		require(dirs.size() == 9, "axis_9 should contain exactly nine machining directions");
+
+		const float diag = std::sqrt(0.5f);
+		const vec3f expected[] = {
+			vec3f(0.f, 0.f, 1.f),
+			vec3f(1.f, 0.f, 0.f),
+			vec3f(-1.f, 0.f, 0.f),
+			vec3f(0.f, 1.f, 0.f),
+			vec3f(0.f, -1.f, 0.f),
+			vec3f(diag, 0.f, diag),
+			vec3f(-diag, 0.f, diag),
+			vec3f(0.f, diag, diag),
+			vec3f(0.f, -diag, diag),
+		};
+
+		for (const auto& target : expected) {
+			bool found = false;
+			for (const auto& dir : dirs) {
+				if (approx(dir.x, target.x, 1e-6f)
+					&& approx(dir.y, target.y, 1e-6f)
+					&& approx(dir.z, target.z, 1e-6f)) {
+					found = true;
+					break;
+				}
+			}
+			require(found, "axis_9 is missing one of the requested directions");
+		}
 	}
 
 	void testCarriageSamples()
@@ -92,6 +190,8 @@ int main()
 {
 	testLegacyDirections();
 	testGoldenHemisphereDirections();
+	testAxisFiveDirections();
+	testAxisNineDirections();
 	testCarriageSamples();
 	testBottomZFilter();
 	std::cout << "SamplingGeometryTest passed" << std::endl;

@@ -54,6 +54,14 @@ namespace osc {
 	bool parseDirectionSamplingMode(const std::string& raw, DirectionSamplingMode& out)
 	{
 		const std::string value = toLowerAscii(raw);
+		if (value == "axis_9" || value == "axis9" || value == "nine_directions" || value == "cardinal_9") {
+			out = DirectionSamplingMode::AxisNine;
+			return true;
+		}
+		if (value == "axis_5" || value == "axis5" || value == "five_directions" || value == "cardinal_5") {
+			out = DirectionSamplingMode::AxisFive;
+			return true;
+		}
 		if (value == "golden_hemisphere" || value == "golden" || value == "hemisphere") {
 			out = DirectionSamplingMode::GoldenHemisphere;
 			return true;
@@ -68,6 +76,10 @@ namespace osc {
 	const char* directionSamplingModeName(DirectionSamplingMode mode)
 	{
 		switch (mode) {
+		case DirectionSamplingMode::AxisNine:
+			return "axis_9";
+		case DirectionSamplingMode::AxisFive:
+			return "axis_5";
 		case DirectionSamplingMode::Legacy66Sphere:
 			return "legacy_66_sphere";
 		case DirectionSamplingMode::GoldenHemisphere:
@@ -79,12 +91,37 @@ namespace osc {
 
 	bool defaultPruneBottomZMin(DirectionSamplingMode mode)
 	{
-		return mode == DirectionSamplingMode::GoldenHemisphere;
+		return mode == DirectionSamplingMode::GoldenHemisphere
+			|| mode == DirectionSamplingMode::AxisFive
+			|| mode == DirectionSamplingMode::AxisNine;
 	}
 
 	std::vector<vec3f> generateDirectionSamples(const DirectionSamplingConfig& config)
 	{
 		std::vector<vec3f> directions;
+		if (config.mode == DirectionSamplingMode::AxisNine) {
+			const float diag = std::sqrt(0.5f);
+			directions.reserve(9);
+			directions.push_back(vec3f(0.f, 0.f, 1.f));
+			directions.push_back(vec3f(1.f, 0.f, 0.f));
+			directions.push_back(vec3f(-1.f, 0.f, 0.f));
+			directions.push_back(vec3f(0.f, 1.f, 0.f));
+			directions.push_back(vec3f(0.f, -1.f, 0.f));
+			directions.push_back(vec3f(diag, 0.f, diag));
+			directions.push_back(vec3f(-diag, 0.f, diag));
+			directions.push_back(vec3f(0.f, diag, diag));
+			directions.push_back(vec3f(0.f, -diag, diag));
+			return directions;
+		}
+		if (config.mode == DirectionSamplingMode::AxisFive) {
+			directions.reserve(5);
+			directions.push_back(vec3f(0.f, 0.f, 1.f));
+			directions.push_back(vec3f(1.f, 0.f, 0.f));
+			directions.push_back(vec3f(-1.f, 0.f, 0.f));
+			directions.push_back(vec3f(0.f, 1.f, 0.f));
+			directions.push_back(vec3f(0.f, -1.f, 0.f));
+			return directions;
+		}
 		if (config.mode == DirectionSamplingMode::Legacy66Sphere) {
 			directions.reserve(66);
 			directions.push_back(vec3f(0.f, 0.f, -1.f));
@@ -105,7 +142,7 @@ namespace osc {
 
 		const int sampleCount = std::max(1, config.goldenPointCount);
 		const float offset = 2.0f / static_cast<float>(sampleCount);
-		directions.reserve(static_cast<size_t>(sampleCount) + 1);
+		directions.reserve(static_cast<size_t>(sampleCount) * 4 + 1);
 		directions.push_back(vec3f(0.f, 0.f, 1.f));
 		for (int i = 0; i < sampleCount; ++i) {
 			const float y = static_cast<float>(i) * offset - 1.0f + (offset * 0.5f);
@@ -115,6 +152,9 @@ namespace osc {
 			const float z = std::sin(theta) * radiusXZ;
 			if (z > config.hemisphereMinZ) {
 				directions.push_back(safeNormalize(vec3f(x, y, z)));
+				directions.push_back(safeNormalize(vec3f(-x, y, z)));
+				directions.push_back(safeNormalize(vec3f(x, -y, z)));
+				directions.push_back(safeNormalize(vec3f(-x, -y, z)));
 			}
 		}
 		return directions;
